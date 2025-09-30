@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI 과제 지원서 검토 시스템</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div id="app">
+        <header>
+            <h1>🤖 AI 과제 지원서 검토 시스템</h1>
+            <p>전사 업무 영역 특화 과제 지원서 자동 검토</p>
+        </header>
+
+        <main>
+            <!-- 제안서 입력 -->
+            <section id="upload-section" class="card">
+                <h2>📝 제안서 입력</h2>
+                <div class="form-group">
+                    <label>업무 도메인:</label>
+                    <select id="domain-select" class="input-field">
+                        <option value="제조">제조/생산</option>
+                        <option value="연구개발">연구개발</option>
+                        <option value="설계">설계</option>
+                        <option value="IT/DX">IT/DX</option>
+                        <option value="경영">경영/기획</option>
+                        <option value="품질">품질</option>
+                        <option value="영업">영업/마케팅</option>
+                        <option value="HR">HR/교육</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>사업부:</label>
+                    <select id="division-select" class="input-field">
+                        <option value="메모리">메모리</option>
+                        <option value="S.LSI">S.LSI</option>
+                        <option value="Foundry">Foundry</option>
+                    </select>
+                </div>
+
+                <!-- HITL 단계 선택 -->
+                <div class="form-group">
+                    <label>인간 검토(HITL) 활성화 단계:</label>
+                    <div style="padding-left: 10px;">
+                        <label style="display: block; margin: 5px 0;">
+                            <input type="checkbox" name="hitl-stage" value="2" checked>
+                            Agent 2 (Objective Reviewer) 이후
+                        </label>
+                        <label style="display: block; margin: 5px 0;">
+                            <input type="checkbox" name="hitl-stage" value="3">
+                            Agent 3 (Data Analyzer) 이후
+                        </label>
+                        <label style="display: block; margin: 5px 0;">
+                            <input type="checkbox" name="hitl-stage" value="4">
+                            Agent 4 (Risk Analyzer) 이후
+                        </label>
+                        <label style="display: block; margin: 5px 0;">
+                            <input type="checkbox" name="hitl-stage" value="5">
+                            Agent 5 (ROI Estimator) 이후
+                        </label>
+                    </div>
+                </div>
+
+                <!-- 입력 방식 선택 -->
+                <div class="form-group">
+                    <label>
+                        <input type="radio" name="input-type" value="file" checked>
+                        파일 업로드
+                    </label>
+                    <label>
+                        <input type="radio" name="input-type" value="text">
+                        직접 작성
+                    </label>
+                </div>
+
+                <!-- 파일 업로드 -->
+                <div id="file-upload-container" class="form-group">
+                    <input type="file" id="file-input" accept=".txt,.md,.pdf,.docx" class="input-field">
+                </div>
+
+                <!-- 텍스트 직접 입력 -->
+                <div id="text-input-container" class="form-group" style="display: none;">
+                    <textarea id="text-input" rows="15" placeholder="제안서 내용을 입력하세요..." class="input-field"></textarea>
+                </div>
+
+                <button id="submit-btn" class="btn-primary">🚀 검토 시작</button>
+            </section>
+
+            <!-- 진행 상황 -->
+            <section id="progress-section" class="card" style="display: none;">
+                <h2>⏳ 검토 진행 상황</h2>
+                <div id="agent-status">
+                    <div class="agent-item">
+                        <span class="agent-name">1. BP Case Scouter</span>
+                        <span id="agent-1-status" class="status-badge">대기중</span>
+                    </div>
+                    <div class="agent-item">
+                        <span class="agent-name">2. Objective Reviewer</span>
+                        <span id="agent-2-status" class="status-badge">대기중</span>
+                    </div>
+                    <div class="agent-item">
+                        <span class="agent-name">3. Data Analyzer</span>
+                        <span id="agent-3-status" class="status-badge">대기중</span>
+                    </div>
+                    <div class="agent-item">
+                        <span class="agent-name">4. Risk Analyzer</span>
+                        <span id="agent-4-status" class="status-badge">대기중</span>
+                    </div>
+                    <div class="agent-item">
+                        <span class="agent-name">5. ROI Estimator</span>
+                        <span id="agent-5-status" class="status-badge">대기중</span>
+                    </div>
+                    <div class="agent-item">
+                        <span class="agent-name">6. Final Generator</span>
+                        <span id="agent-6-status" class="status-badge">대기중</span>
+                    </div>
+                </div>
+                <div id="progress-message"></div>
+            </section>
+
+            <!-- HITL 피드백 -->
+            <section id="hitl-section" class="card" style="display: none;">
+                <h2>✅ 검토 결과 확인</h2>
+                <div id="review-results" class="results-box"></div>
+                <div class="form-group">
+                    <label>피드백:</label>
+                    <textarea id="feedback-input" rows="5" placeholder="피드백을 입력하세요..." class="input-field"></textarea>
+                </div>
+                <div style="display: flex; gap: 10px;">
+                    <button id="submit-feedback-btn" class="btn-primary">✅ 승인 및 계속</button>
+                    <button id="skip-feedback-btn" class="btn-secondary">⏭️ 건너뛰기</button>
+                </div>
+            </section>
+
+            <!-- 최종 결과 -->
+            <section id="result-section" class="card" style="display: none;">
+                <h2>📄 최종 검토 보고서</h2>
+                <div id="final-report" class="results-box"></div>
+                <button id="download-pdf-btn" class="btn-secondary">📥 PDF 다운로드</button>
+            </section>
+        </main>
+
+        <footer>
+            <p>AI Proposal Reviewer v1.0.0 | MVP</p>
+        </footer>
+    </div>
+
+    <script type="module" src="/static/js/app.js"></script>
+</body>
+</html>

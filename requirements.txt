@@ -1,0 +1,24 @@
+# 핵심 프레임워크
+fastapi==0.115.0
+uvicorn[standard]==0.30.0
+python-multipart==0.0.9
+
+# LangGraph & LangChain
+langgraph==0.2.50
+langchain==0.3.0
+
+# LLM 연동
+openai==1.50.0
+
+# PDF 생성
+weasyprint==62.3
+
+# 유틸리티
+python-dotenv==1.0.0
+pydantic==2.9.0
+
+# 테스트
+pytest==8.3.0
+pytest-asyncio==0.24.0
+playwright==1.48.0
+pytest-playwright==0.6.2

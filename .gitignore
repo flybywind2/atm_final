@@ -1,0 +1,6 @@
+.claude
+.playwright-mcp
+.pytest_cache
+data/review.db
+nul
+pytest.ini
