@@ -98,6 +98,11 @@ function connectWebSocket(jobId) {
             updateProgressMessage(data.message);
         }
 
+        // BP 검색 결과 표시
+        if (data.bp_cases) {
+            showBPCases(data.bp_cases);
+        }
+
         // HITL 인터럽트 처리
         if (data.status === 'interrupt') {
             showHITLSection(data.results);
@@ -152,6 +157,39 @@ function updateProgressMessage(message) {
     if (messageDiv) {
         messageDiv.textContent = message || '';
     }
+}
+
+// BP 검색 결과 표시
+function showBPCases(bpCases) {
+    const panel = document.getElementById('bp-cases-panel');
+    const content = document.getElementById('bp-cases-content');
+
+    if (!bpCases || bpCases.length === 0) {
+        return;
+    }
+
+    panel.style.display = 'block';
+
+    let html = '';
+    bpCases.forEach((bpCase, index) => {
+        html += `
+            <div style="background: white; padding: 12px; margin-bottom: 12px; border-radius: 6px; border-left: 4px solid #4CAF50;">
+                <h4 style="margin: 0 0 8px 0; color: #333; font-size: 0.95em;">
+                    ${index + 1}. ${bpCase.title}
+                </h4>
+                <div style="font-size: 0.85em; color: #666; line-height: 1.5;">
+                    <p style="margin: 4px 0;"><strong>기술 유형:</strong> ${bpCase.tech_type}</p>
+                    <p style="margin: 4px 0;"><strong>도메인:</strong> ${bpCase.business_domain} | <strong>사업부:</strong> ${bpCase.division}</p>
+                    <p style="margin: 4px 0;"><strong>문제 (AS-WAS):</strong> ${bpCase.problem_as_was}</p>
+                    <p style="margin: 4px 0;"><strong>솔루션 (TO-BE):</strong> ${bpCase.solution_to_be}</p>
+                    <p style="margin: 4px 0; color: #2196F3;"><strong>핵심 요약:</strong> ${bpCase.summary}</p>
+                    ${bpCase.tips ? `<p style="margin: 4px 0; color: #FF9800;"><strong>💡 팁:</strong> ${bpCase.tips}</p>` : ''}
+                </div>
+            </div>
+        `;
+    });
+
+    content.innerHTML = html;
 }
 
 // HITL 섹션 표시

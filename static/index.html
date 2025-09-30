@@ -94,33 +94,42 @@
             <!-- 진행 상황 -->
             <section id="progress-section" class="card" style="display: none;">
                 <h2>⏳ 검토 진행 상황</h2>
-                <div id="agent-status">
-                    <div class="agent-item">
-                        <span class="agent-name">1. BP Case Scouter</span>
-                        <span id="agent-1-status" class="status-badge">대기중</span>
+                <div style="display: flex; gap: 20px;">
+                    <div style="flex: 1;">
+                        <div id="agent-status">
+                            <div class="agent-item">
+                                <span class="agent-name">1. BP Case Scouter</span>
+                                <span id="agent-1-status" class="status-badge">대기중</span>
+                            </div>
+                            <div class="agent-item">
+                                <span class="agent-name">2. Objective Reviewer</span>
+                                <span id="agent-2-status" class="status-badge">대기중</span>
+                            </div>
+                            <div class="agent-item">
+                                <span class="agent-name">3. Data Analyzer</span>
+                                <span id="agent-3-status" class="status-badge">대기중</span>
+                            </div>
+                            <div class="agent-item">
+                                <span class="agent-name">4. Risk Analyzer</span>
+                                <span id="agent-4-status" class="status-badge">대기중</span>
+                            </div>
+                            <div class="agent-item">
+                                <span class="agent-name">5. ROI Estimator</span>
+                                <span id="agent-5-status" class="status-badge">대기중</span>
+                            </div>
+                            <div class="agent-item">
+                                <span class="agent-name">6. Final Generator</span>
+                                <span id="agent-6-status" class="status-badge">대기중</span>
+                            </div>
+                        </div>
+                        <div id="progress-message"></div>
                     </div>
-                    <div class="agent-item">
-                        <span class="agent-name">2. Objective Reviewer</span>
-                        <span id="agent-2-status" class="status-badge">대기중</span>
-                    </div>
-                    <div class="agent-item">
-                        <span class="agent-name">3. Data Analyzer</span>
-                        <span id="agent-3-status" class="status-badge">대기중</span>
-                    </div>
-                    <div class="agent-item">
-                        <span class="agent-name">4. Risk Analyzer</span>
-                        <span id="agent-4-status" class="status-badge">대기중</span>
-                    </div>
-                    <div class="agent-item">
-                        <span class="agent-name">5. ROI Estimator</span>
-                        <span id="agent-5-status" class="status-badge">대기중</span>
-                    </div>
-                    <div class="agent-item">
-                        <span class="agent-name">6. Final Generator</span>
-                        <span id="agent-6-status" class="status-badge">대기중</span>
+                    <div id="bp-cases-panel" style="flex: 1; display: none;">
+                        <h3 style="margin-top: 0;">📚 검색된 BP 사례</h3>
+                        <div id="bp-cases-content" style="background: #f9f9f9; padding: 15px; border-radius: 8px; max-height: 400px; overflow-y: auto;">
+                        </div>
                     </div>
                 </div>
-                <div id="progress-message"></div>
             </section>
 
             <!-- HITL 피드백 -->

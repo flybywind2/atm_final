@@ -7,9 +7,17 @@ import uvicorn
 import asyncio
 from pathlib import Path
 import ollama
+import os
+import uuid
+import json
+import requests
+from dotenv import load_dotenv
 
 from database.db import init_database, create_job, get_job, update_job_status
 from config.settings import HOST, PORT
+
+# 환경 변수 로드
+load_dotenv()
 
 app = FastAPI(title="AI Proposal Reviewer", version="1.0.0")
 
@@ -32,10 +40,12 @@ active_connections: dict[str, WebSocket] = {}
 
 @app.on_event("startup")
 async def startup_event():
-    """서버 시작 시 데이터베이스 초기화"""
+    """서버 시작 시 데이터베이스 및 LLM 초기화"""
     print("Server starting...")
     init_database()
     print("Database ready")
+    init_llm()
+    print("LLM ready")
 
 @app.get("/")
 async def root():
@@ -94,17 +104,124 @@ async def submit_proposal(
 
     return {"job_id": job_id, "status": "submitted"}
 
-def call_ollama(prompt: str, model: str = "gemma3:1b") -> str:
-    """Ollama를 통한 LLM 호출"""
-    try:
-        response = ollama.chat(
+# LLM 설정 및 초기화
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama")
+llm_client = None
+
+def init_llm():
+    """환경 변수에 따라 LLM 클라이언트 초기화"""
+    global llm_client
+
+    if LLM_PROVIDER == "internal":
+        # Internal LLM 설정 (lazy import to avoid pydantic version issues)
+        from langchain_openai import ChatOpenAI
+
+        base_url = os.getenv("INTERNAL_BASE_URL")
+        model = os.getenv("INTERNAL_MODEL")
+        credential_key = os.getenv("INTERNAL_CREDENTIAL_KEY")
+        system_name = os.getenv("INTERNAL_SYSTEM_NAME")
+        user_id = os.getenv("INTERNAL_USER_ID")
+
+        llm_client = ChatOpenAI(
+            base_url=base_url,
             model=model,
-            messages=[{"role": "user", "content": prompt}]
+            default_headers={
+                "x-dep-ticket": credential_key,
+                "Send-System-Name": system_name,
+                "User-ID": user_id,
+                "User-Type": "AD",
+                "Prompt-Msg-Id": str(uuid.uuid4()),
+                "Completion-Msg-Id": str(uuid.uuid4()),
+            },
         )
-        return response['message']['content']
+        print(f"Internal LLM initialized: {model}")
+    else:
+        # Ollama 설정
+        llm_client = "ollama"  # Ollama는 직접 함수로 호출
+        print(f"Ollama LLM initialized: {os.getenv('OLLAMA_MODEL', 'gemma2:2b')}")
+
+def call_llm(prompt: str) -> str:
+    """통합 LLM 호출 함수"""
+    try:
+        if LLM_PROVIDER == "internal":
+            # Internal LLM 사용
+            response = llm_client.invoke(prompt)
+            return response.content
+        else:
+            # Ollama 사용
+            model = os.getenv("OLLAMA_MODEL", "gemma2:2b")
+            response = ollama.chat(
+                model=model,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            return response['message']['content']
     except Exception as e:
-        print(f"Ollama API 호출 실패: {e}")
+        print(f"LLM API 호출 실패: {e}")
         return f"AI 응답 생성 실패: {e}"
+
+def call_ollama(prompt: str, model: str = "gemma3:1b") -> str:
+    """Ollama를 통한 LLM 호출 (하위 호환성을 위해 유지, 내부적으로 call_llm 사용)"""
+    return call_llm(prompt)
+
+def retrieve_from_rag(query_text: str, num_result_doc: int = 5, retrieval_method: str = "rrf") -> list:
+    """RAG를 통한 문서 검색
+
+    Args:
+        query_text: 검색 쿼리
+        num_result_doc: 반환할 문서 수
+        retrieval_method: 검색 방법 ("rrf", "bm25", "knn", "cc")
+
+    Returns:
+        검색 결과 리스트
+    """
+    try:
+        # 환경 변수에서 RAG 설정 로드
+        base_url = os.getenv("RAG_BASE_URL", "http://localhost:8000")
+        credential_key = os.getenv("RAG_CREDENTIAL_KEY", "")
+        rag_api_key = os.getenv("RAG_API_KEY", "")
+        index_name = os.getenv("RAG_INDEX_NAME", "")
+        permission_groups = os.getenv("RAG_PERMISSION_GROUPS", "user").split(",")
+
+        # 검색 URL 설정
+        retrieval_urls = {
+            "rrf": f"{base_url}/retrieve-rrf",
+            "bm25": f"{base_url}/retrieve-bm25",
+            "knn": f"{base_url}/retrieve-knn",
+            "cc": f"{base_url}/retrieve-cc"
+        }
+
+        retrieval_url = retrieval_urls.get(retrieval_method, retrieval_urls["rrf"])
+
+        # 헤더 설정
+        headers = {
+            "Content-Type": "application/json",
+            "x-dep-ticket": credential_key,
+            "api-key": rag_api_key
+        }
+
+        # 요청 데이터 설정
+        fields = {
+            "index_name": index_name,
+            "permission_groups": permission_groups,
+            "query_text": query_text,
+            "num_result_doc": num_result_doc,
+            "fields_exclude": ["v_merge_title_content"]
+        }
+
+        # RAG API 호출
+        response = requests.post(retrieval_url, headers=headers, json=fields, timeout=30)
+
+        if response.status_code == 200:
+            result = response.json()
+            print(f"RAG 검색 완료: {len(result.get('hits', {}).get('hits', []))}건 검색됨")
+            return result.get('hits', {}).get('hits', [])
+        else:
+            print(f"RAG API 호출 실패: {response.status_code} - {response.text}")
+            return []
+
+    except Exception as e:
+        print(f"RAG 검색 실패: {e}")
+        return []
 
 def generate_feedback_suggestion(agent_name: str, analysis_result: str, proposal_text: str) -> str:
     """에이전트 분석 결과를 바탕으로 구체적인 피드백 제안 생성"""
@@ -131,21 +248,55 @@ def generate_feedback_suggestion(agent_name: str, analysis_result: str, proposal
     return result
 
 async def rag_retrieve_bp_cases(domain: str, division: str):
-    """RAG를 통한 BP 사례 검색 (실패 시 pass)"""
+    """RAG를 통한 BP 사례 검색 (실패 시 fallback)"""
     try:
-        # 실제 RAG 검색 로직 (회사 내부망에서만 동작)
-        # 여기서는 시뮬레이션
+        # 검색 쿼리 구성
+        query_text = f"{domain} {division} AI 과제 사례 Best Practice"
+
+        # RAG 검색 수행 (비동기 함수에서 동기 함수 호출)
+        rag_results = await asyncio.to_thread(retrieve_from_rag, query_text, num_result_doc=5)
+
+        if rag_results:
+            # RAG 검색 결과를 BP 사례 형식으로 변환
+            cases = []
+            for hit in rag_results:
+                source = hit.get('_source', {})
+                case = {
+                    "title": source.get('title', '제목 없음'),
+                    "tech_type": source.get('tech_type', 'AI/ML'),
+                    "business_domain": source.get('business_domain', domain),
+                    "division": source.get('division', division),
+                    "problem_as_was": source.get('problem', '문제 정의'),
+                    "solution_to_be": source.get('solution', '해결 방안'),
+                    "summary": source.get('summary', source.get('content', '')[:200]),
+                    "tips": source.get('tips', '')
+                }
+                cases.append(case)
+
+            print(f"RAG 검색 성공: {len(cases)}건 반환")
+            return {"success": True, "cases": cases}
+        else:
+            # RAG 검색 실패 시 시뮬레이션 데이터 반환
+            print("RAG 검색 결과 없음, 시뮬레이션 데이터 반환")
+            return {
+                "success": False,
+                "cases": [
+                    {"title": "AI 인프라 모니터링", "tech_type": "AI/ML", "business_domain": domain, "division": division, "problem_as_was": "수동 모니터링으로 인한 장애 대응 지연", "solution_to_be": "AI 기반 실시간 이상 탐지 및 자동 알림", "summary": "AI를 활용한 인프라 모니터링 자동화", "tips": "실시간 데이터 수집 파이프라인 구축 필요"},
+                    {"title": "예측 유지보수 시스템", "tech_type": "예측 분석", "business_domain": domain, "division": division, "problem_as_was": "사후 대응으로 인한 생산 중단", "solution_to_be": "ML 기반 고장 예측 및 사전 유지보수", "summary": "설비 고장을 사전에 예측하여 생산성 향상", "tips": "과거 고장 데이터 축적이 중요"},
+                    {"title": "이상 감지 자동화", "tech_type": "이상 탐지", "business_domain": domain, "division": division, "problem_as_was": "품질 불량 발생 후 사후 조치", "solution_to_be": "실시간 이상 탐지 및 자동 조치", "summary": "AI 기반 품질 이상 자동 감지 시스템", "tips": "정상 데이터 패턴 학습이 선행되어야 함"}
+                ]
+            }
+    except Exception as e:
+        print(f"RAG retrieve failed (exception): {e}")
+        # 예외 발생 시 시뮬레이션 데이터 반환
         return {
-            "success": True,
+            "success": False,
             "cases": [
-                {"title": "AI 인프라 모니터링", "domain": domain, "division": division},
-                {"title": "예측 유지보수 시스템", "domain": domain, "division": division},
-                {"title": "이상 감지 자동화", "domain": domain, "division": division}
+                {"title": "AI 인프라 모니터링", "tech_type": "AI/ML", "business_domain": domain, "division": division, "problem_as_was": "수동 모니터링으로 인한 장애 대응 지연", "solution_to_be": "AI 기반 실시간 이상 탐지 및 자동 알림", "summary": "AI를 활용한 인프라 모니터링 자동화", "tips": "실시간 데이터 수집 파이프라인 구축 필요"},
+                {"title": "예측 유지보수 시스템", "tech_type": "예측 분석", "business_domain": domain, "division": division, "problem_as_was": "사후 대응으로 인한 생산 중단", "solution_to_be": "ML 기반 고장 예측 및 사전 유지보수", "summary": "설비 고장을 사전에 예측하여 생산성 향상", "tips": "과거 고장 데이터 축적이 중요"},
+                {"title": "이상 감지 자동화", "tech_type": "이상 탐지", "business_domain": domain, "division": division, "problem_as_was": "품질 불량 발생 후 사후 조치", "solution_to_be": "실시간 이상 탐지 및 자동 조치", "summary": "AI 기반 품질 이상 자동 감지 시스템", "tips": "정상 데이터 패턴 학습이 선행되어야 함"}
             ]
         }
-    except Exception as e:
-        print(f"RAG retrieve failed (pass): {e}")
-        return {"success": False, "cases": []}
 
 async def wait_for_feedback(job_id: int, timeout_seconds: int = 300):
     """HITL 피드백 대기 헬퍼 함수"""
@@ -202,7 +353,13 @@ async def process_review(job_id: int):
 
         await asyncio.sleep(2)
         if ws:
-            await ws.send_json({"status": "completed", "agent": "BP_Scouter", "message": f"BP 사례 {len(bp_cases)}건 검색 완료"})
+            # BP 검색 완료 메시지와 함께 결과 전송
+            await ws.send_json({
+                "status": "completed",
+                "agent": "BP_Scouter",
+                "message": f"BP 사례 {len(bp_cases)}건 검색 완료",
+                "bp_cases": bp_cases  # BP 검색 결과 추가
+            })
         update_job_status(job_id, "bp_scouter_done")
 
         # Agent 2: Objective Reviewer
