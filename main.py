@@ -442,6 +442,40 @@ ROI 추정:
 
         final_recommendation = await asyncio.to_thread(call_ollama, final_prompt)
 
+        if ws:
+            await ws.send_json({"status": "completed", "agent": "Final_Generator", "message": "최종 의견 생성 완료"})
+        update_job_status(job_id, "final_done")
+
+        # HITL 인터럽트: Agent 6 이후 (설정에 따라)
+        if 6 in hitl_stages:
+            # 피드백 제안 생성
+            feedback_suggestion = await asyncio.to_thread(
+                generate_feedback_suggestion,
+                "Final Generator",
+                final_recommendation,
+                proposal_text
+            )
+            print(f"[DEBUG] Sending HITL interrupt with feedback_suggestion: {len(feedback_suggestion)} chars")
+
+            if ws:
+                await ws.send_json({
+                    "status": "interrupt",
+                    "message": "최종 의견을 확인하고 피드백을 제공해주세요",
+                    "results": {
+                        "final_recommendation": final_recommendation,
+                        "feedback_suggestion": feedback_suggestion
+                    }
+                })
+                print(f"[DEBUG] HITL interrupt sent via WebSocket")
+
+            # 피드백 대기
+            await wait_for_feedback(job_id)
+
+            # 피드백 받은 후 보고서 생성
+            if ws:
+                await ws.send_json({"status": "processing", "message": "피드백 반영하여 최종 보고서 생성 중..."})
+            await asyncio.sleep(1)
+
         # 최종 완료
         final_report = f"""
         <div style="padding: 20px;">

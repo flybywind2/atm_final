@@ -212,6 +212,18 @@ function showHITLSection(results) {
                 아래 제안된 피드백을 검토하고 수정하여 제출하거나 건너뛰어 다음 단계로 진행하세요.
             </p>
         `;
+    } else if (results.final_recommendation) {
+        // Agent 6: Final Generator 결과
+        html = `
+            <h3>📋 최종 의견</h3>
+            <div style="background: #e8f4f8; padding: 15px; border-radius: 8px; margin: 10px 0;">
+                <p style="white-space: pre-wrap;">${results.final_recommendation}</p>
+            </div>
+            <p style="color: #666; font-size: 0.9em; margin-top: 10px;">
+                ℹ️ Agent 6 (Final Generator)의 최종 의견이 완료되었습니다.
+                아래 제안된 피드백을 검토하고 수정하여 제출하거나 건너뛰어 다음 단계로 진행하세요.
+            </p>
+        `;
     }
 
     resultsDiv.innerHTML = html;
