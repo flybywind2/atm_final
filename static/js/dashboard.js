@@ -2,7 +2,7 @@
 const state = {
     jobs: [],
     total: 0,
-    limit: 50,
+    limit: 25,
     offset: 0,
     filters: {
         status: '',
@@ -25,6 +25,11 @@ const filterLimit = document.getElementById('filter-limit');
 // 목록 및 카운트
 const jobsTableBody = document.getElementById('jobs-table-body');
 const jobsCountLabel = document.getElementById('jobs-count');
+
+// 페이지네이션 요소
+const prevPageBtn = document.getElementById('prev-page');
+const nextPageBtn = document.getElementById('next-page');
+const pageInfoLabel = document.getElementById('page-info');
 
 // 생성 폼
 const createForm = document.getElementById('create-job-form');
@@ -86,6 +91,16 @@ function updateCountLabel() {
     jobsCountLabel.textContent = `총 ${state.total}건`;
 }
 
+function updatePaginationUI() {
+    const currentPage = Math.floor(state.offset / state.limit) + 1;
+    const totalPages = Math.ceil(state.total / state.limit);
+
+    pageInfoLabel.textContent = `페이지 ${currentPage} / ${totalPages}`;
+
+    prevPageBtn.disabled = state.offset === 0;
+    nextPageBtn.disabled = state.offset + state.limit >= state.total;
+}
+
 async function fetchJobs() {
     showTableLoading();
     const params = new URLSearchParams();
@@ -106,6 +121,7 @@ async function fetchJobs() {
         state.total = data.total || 0;
         renderJobs();
         updateCountLabel();
+        updatePaginationUI();
     } catch (error) {
         console.error('목록 조회 실패:', error);
         jobsTableBody.innerHTML = `
@@ -340,7 +356,13 @@ filterForm.addEventListener('submit', (event) => {
     state.filters.humanDecision = filterHumanDecision.value;
     state.filters.llmDecision = filterLLMDecision.value;
     state.filters.search = filterSearch.value.trim();
-    state.limit = Number.parseInt(filterLimit.value, 10) || 50;
+    state.limit = Number.parseInt(filterLimit.value, 10) || 25;
+    state.offset = 0;
+    fetchJobs();
+});
+
+filterLimit.addEventListener('change', () => {
+    state.limit = Number.parseInt(filterLimit.value, 10) || 25;
     state.offset = 0;
     fetchJobs();
 });
@@ -350,9 +372,9 @@ resetFiltersBtn.addEventListener('click', () => {
     filterHumanDecision.value = '';
     filterLLMDecision.value = '';
     filterSearch.value = '';
-    filterLimit.value = '50';
+    filterLimit.value = '25';
     state.filters = { status: '', humanDecision: '', llmDecision: '', search: '' };
-    state.limit = 50;
+    state.limit = 25;
     state.offset = 0;
     fetchJobs();
 });
@@ -452,6 +474,20 @@ detailModalBackdrop.addEventListener('click', closeDetailModal);
 window.addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && !detailModal.classList.contains('hidden')) {
         closeDetailModal();
+    }
+});
+
+prevPageBtn.addEventListener('click', () => {
+    if (state.offset > 0) {
+        state.offset = Math.max(0, state.offset - state.limit);
+        fetchJobs();
+    }
+});
+
+nextPageBtn.addEventListener('click', () => {
+    if (state.offset + state.limit < state.total) {
+        state.offset += state.limit;
+        fetchJobs();
     }
 });
 

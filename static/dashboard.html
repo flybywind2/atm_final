@@ -64,8 +64,8 @@
                         <label>
                             표시 수
                             <select id="filter-limit" class="input-field">
-                                <option value="25">25</option>
-                                <option value="50" selected>50</option>
+                                <option value="25" selected>25</option>
+                                <option value="50">50</option>
                                 <option value="100">100</option>
                             </select>
                         </label>
@@ -103,6 +103,11 @@
                             </tr>
                         </tbody>
                     </table>
+                </div>
+                <div class="pagination" id="pagination">
+                    <button id="prev-page" class="btn-secondary" disabled>이전</button>
+                    <span id="page-info" class="page-info">페이지 1</span>
+                    <button id="next-page" class="btn-secondary">다음</button>
                 </div>
             </section>
 
