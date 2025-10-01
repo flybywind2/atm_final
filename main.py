@@ -223,6 +223,64 @@ def retrieve_from_rag(query_text: str, num_result_doc: int = 5, retrieval_method
         print(f"RAG 검색 실패: {e}")
         return []
 
+def analyze_feedback_for_retry(feedback: str, agent_name: str) -> dict:
+    """피드백을 분석하여 재검토 필요 여부 판단
+
+    Returns:
+        {
+            "needs_retry": bool,  # 재검토 필요 여부
+            "reason": str,  # 재검토가 필요한 이유
+            "additional_info_needed": list  # 필요한 추가 정보 항목들
+        }
+    """
+    print(f"[DEBUG] Analyzing feedback for {agent_name}...")
+
+    # 피드백이 비어있으면 재검토 불필요
+    if not feedback or feedback.strip() == "":
+        return {"needs_retry": False, "reason": "No feedback provided", "additional_info_needed": []}
+
+    analysis_prompt = f"""당신은 AI 검토 프로세스의 orchestrator입니다.
+다음은 {agent_name}의 검토 결과에 대한 사용자 피드백입니다:
+
+피드백:
+{feedback}
+
+위 피드백을 분석하여 다음을 판단해주세요:
+
+1. 추가 정보가 필요한가? (예: 구체적인 데이터 요청, 추가 분석 요청, 명확화 요청 등)
+2. 단순히 확인/승인하는 내용인가?
+3. 수정 제안만 포함하고 있는가?
+
+다음 형식의 JSON으로만 응답해주세요 (다른 설명 없이):
+{{
+    "needs_retry": true/false,
+    "reason": "재검토가 필요한 구체적인 이유 또는 '재검토 불필요'",
+    "additional_info_needed": ["항목1", "항목2", ...]
+}}
+
+판단 기준:
+- needs_retry = true: 피드백에 "추가로", "더 자세히", "구체적으로", "명확히" 등의 요청이 있거나, 새로운 분석/데이터를 요구하는 경우
+- needs_retry = false: 단순 확인, 승인, 일반적인 수정 제안만 있는 경우"""
+
+    try:
+        result = call_ollama(analysis_prompt)
+        print(f"[DEBUG] Feedback analysis result: {result[:200]}...")
+
+        # JSON 파싱
+        import json
+        # JSON 부분만 추출 (```json ``` 제거)
+        json_str = result.strip()
+        if "```json" in json_str:
+            json_str = json_str.split("```json")[1].split("```")[0].strip()
+        elif "```" in json_str:
+            json_str = json_str.split("```")[1].split("```")[0].strip()
+
+        analysis = json.loads(json_str)
+        return analysis
+    except Exception as e:
+        print(f"[DEBUG] Failed to parse feedback analysis: {e}, treating as no retry needed")
+        return {"needs_retry": False, "reason": "Analysis failed", "additional_info_needed": []}
+
 def generate_feedback_suggestion(agent_name: str, analysis_result: str, proposal_text: str) -> str:
     """에이전트 분석 결과를 바탕으로 구체적인 피드백 제안 생성"""
     print(f"[DEBUG] Generating feedback suggestion for {agent_name}...")
@@ -329,6 +387,10 @@ async def process_review(job_id: int):
         hitl_stages = job.get("hitl_stages", [2])
         print(f"HITL stages enabled: {hitl_stages}")
 
+        # HITL 재시도 카운터 초기화 (각 에이전트당 최대 3회)
+        hitl_retry_counts = {2: 0, 3: 0, 4: 0, 5: 0, 6: 0}
+        MAX_HITL_RETRIES = 3
+
         # Wait for WebSocket connection (up to 3 seconds)
         for i in range(30):
             ws = active_connections.get(str(job_id))
@@ -388,28 +450,99 @@ async def process_review(job_id: int):
 
         # HITL 인터럽트: Agent 2 이후 (설정에 따라)
         if 2 in hitl_stages:
-            # 피드백 제안 생성
-            feedback_suggestion = await asyncio.to_thread(
-                generate_feedback_suggestion,
-                "Objective Reviewer",
-                objective_review,
-                proposal_text
-            )
-            print(f"[DEBUG] Sending HITL interrupt with feedback_suggestion: {len(feedback_suggestion)} chars")
+            agent_num = 2
+            while True:
+                # 피드백 제안 생성
+                feedback_suggestion = await asyncio.to_thread(
+                    generate_feedback_suggestion,
+                    "Objective Reviewer",
+                    objective_review,
+                    proposal_text
+                )
+                print(f"[DEBUG] Sending HITL interrupt with feedback_suggestion: {len(feedback_suggestion)} chars")
 
-            if ws:
-                await ws.send_json({
-                    "status": "interrupt",
-                    "message": "검토 결과를 확인하고 피드백을 제공해주세요",
-                    "results": {
-                        "objective_review": objective_review,
-                        "feedback_suggestion": feedback_suggestion
-                    }
-                })
-                print(f"[DEBUG] HITL interrupt sent via WebSocket")
+                if ws:
+                    await ws.send_json({
+                        "status": "interrupt",
+                        "message": f"검토 결과를 확인하고 피드백을 제공해주세요 (재시도 {hitl_retry_counts[agent_num]}/{MAX_HITL_RETRIES})",
+                        "results": {
+                            "objective_review": objective_review,
+                            "feedback_suggestion": feedback_suggestion
+                        }
+                    })
+                    print(f"[DEBUG] HITL interrupt sent via WebSocket")
 
-            # 피드백 대기
-            await wait_for_feedback(job_id)
+                # 피드백 대기
+                await wait_for_feedback(job_id)
+
+                # 피드백 분석
+                job = get_job(job_id)
+                user_feedback = job.get("feedback", "")
+
+                retry_decision = await asyncio.to_thread(
+                    analyze_feedback_for_retry,
+                    user_feedback,
+                    "Objective Reviewer"
+                )
+
+                print(f"[DEBUG] Retry decision for Agent 2: {retry_decision}")
+
+                # 재시도 필요 여부 판단
+                if retry_decision.get("needs_retry") and hitl_retry_counts[agent_num] < MAX_HITL_RETRIES:
+                    hitl_retry_counts[agent_num] += 1
+                    print(f"[DEBUG] Agent 2 재시도 {hitl_retry_counts[agent_num]}/{MAX_HITL_RETRIES}")
+
+                    if ws:
+                        await ws.send_json({
+                            "status": "processing",
+                            "agent": "Objective_Reviewer",
+                            "message": f"추가 정보 반영하여 재검토 중... ({hitl_retry_counts[agent_num]}/{MAX_HITL_RETRIES})"
+                        })
+
+                    # 피드백을 반영하여 재검토
+                    retry_prompt = f"""당신은 기업의 AI 과제 제안서를 검토하는 전문가입니다.
+이전 검토에 대한 사용자 피드백을 반영하여 재검토해주세요.
+
+제안서 내용:
+{proposal_text}
+
+이전 검토 결과:
+{objective_review}
+
+사용자 피드백:
+{user_feedback}
+
+필요한 추가 정보: {', '.join(retry_decision.get('additional_info_needed', []))}
+
+피드백을 반영하여 다음 항목을 재평가하고 짧게 요약해주세요:
+1. 목표의 명확성
+2. 조직 전략과의 정렬성
+3. 실현 가능성
+
+간결하게 2-3문장으로 평가 결과를 작성해주세요."""
+
+                    objective_review = await asyncio.to_thread(call_ollama, retry_prompt)
+
+                    if ws:
+                        await ws.send_json({
+                            "status": "completed",
+                            "agent": "Objective_Reviewer",
+                            "message": "재검토 완료"
+                        })
+
+                    # 재검토 결과로 다시 HITL
+                    continue
+                else:
+                    # 재시도 불필요하거나 최대 횟수 도달
+                    if hitl_retry_counts[agent_num] >= MAX_HITL_RETRIES:
+                        print(f"[DEBUG] Agent 2 최대 재시도 횟수 도달")
+                        if ws:
+                            await ws.send_json({
+                                "status": "processing",
+                                "agent": "Objective_Reviewer",
+                                "message": "최대 재시도 횟수 도달, 다음 단계로 진행합니다"
+                            })
+                    break
 
             # 피드백 받은 후 계속 진행
             if ws:
@@ -441,28 +574,91 @@ async def process_review(job_id: int):
 
         # HITL 인터럽트: Agent 3 이후 (설정에 따라)
         if 3 in hitl_stages:
-            # 피드백 제안 생성
-            feedback_suggestion = await asyncio.to_thread(
-                generate_feedback_suggestion,
-                "Data Analyzer",
-                data_analysis,
-                proposal_text
-            )
+            agent_num = 3
+            while True:
+                feedback_suggestion = await asyncio.to_thread(
+                    generate_feedback_suggestion,
+                    "Data Analyzer",
+                    data_analysis,
+                    proposal_text
+                )
 
-            if ws:
-                await ws.send_json({
-                    "status": "interrupt",
-                    "message": "데이터 분석 결과를 확인하고 피드백을 제공해주세요",
-                    "results": {
-                        "data_analysis": data_analysis,
-                        "feedback_suggestion": feedback_suggestion
-                    }
-                })
+                if ws:
+                    await ws.send_json({
+                        "status": "interrupt",
+                        "message": f"데이터 분석 결과를 확인하고 피드백을 제공해주세요 (재시도 {hitl_retry_counts[agent_num]}/{MAX_HITL_RETRIES})",
+                        "results": {
+                            "data_analysis": data_analysis,
+                            "feedback_suggestion": feedback_suggestion
+                        }
+                    })
 
-            # 피드백 대기
-            await wait_for_feedback(job_id)
+                await wait_for_feedback(job_id)
 
-            # 피드백 받은 후 계속 진행
+                job = get_job(job_id)
+                user_feedback = job.get("feedback", "")
+
+                retry_decision = await asyncio.to_thread(
+                    analyze_feedback_for_retry,
+                    user_feedback,
+                    "Data Analyzer"
+                )
+
+                print(f"[DEBUG] Retry decision for Agent 3: {retry_decision}")
+
+                if retry_decision.get("needs_retry") and hitl_retry_counts[agent_num] < MAX_HITL_RETRIES:
+                    hitl_retry_counts[agent_num] += 1
+                    print(f"[DEBUG] Agent 3 재시도 {hitl_retry_counts[agent_num]}/{MAX_HITL_RETRIES}")
+
+                    if ws:
+                        await ws.send_json({
+                            "status": "processing",
+                            "agent": "Data_Analyzer",
+                            "message": f"추가 정보 반영하여 재검토 중... ({hitl_retry_counts[agent_num]}/{MAX_HITL_RETRIES})"
+                        })
+
+                    retry_prompt = f"""당신은 AI 프로젝트의 데이터 분석 전문가입니다.
+이전 분석에 대한 사용자 피드백을 반영하여 재분석해주세요.
+
+제안서 내용:
+{proposal_text}
+
+이전 분석 결과:
+{data_analysis}
+
+사용자 피드백:
+{user_feedback}
+
+필요한 추가 정보: {', '.join(retry_decision.get('additional_info_needed', []))}
+
+피드백을 반영하여 다음 항목을 재평가하고 짧게 요약해주세요:
+1. 데이터 확보 가능성
+2. 데이터 품질 예상
+3. 데이터 접근성
+
+간결하게 2-3문장으로 평가 결과를 작성해주세요."""
+
+                    data_analysis = await asyncio.to_thread(call_ollama, retry_prompt)
+
+                    if ws:
+                        await ws.send_json({
+                            "status": "completed",
+                            "agent": "Data_Analyzer",
+                            "message": "재분석 완료"
+                        })
+
+                    continue
+                else:
+                    if hitl_retry_counts[agent_num] >= MAX_HITL_RETRIES:
+                        print(f"[DEBUG] Agent 3 최대 재시도 횟수 도달")
+                        if ws:
+                            await ws.send_json({
+                                "status": "processing",
+                                "agent": "Data_Analyzer",
+                                "message": "최대 재시도 횟수 도달, 다음 단계로 진행합니다"
+                            })
+                    break
+
             if ws:
                 await ws.send_json({"status": "processing", "agent": "Risk_Analyzer", "message": "피드백 반영하여 분석 계속 진행..."})
             await asyncio.sleep(1)
@@ -492,28 +688,91 @@ async def process_review(job_id: int):
 
         # HITL 인터럽트: Agent 4 이후 (설정에 따라)
         if 4 in hitl_stages:
-            # 피드백 제안 생성
-            feedback_suggestion = await asyncio.to_thread(
-                generate_feedback_suggestion,
-                "Risk Analyzer",
-                risk_analysis,
-                proposal_text
-            )
+            agent_num = 4
+            while True:
+                feedback_suggestion = await asyncio.to_thread(
+                    generate_feedback_suggestion,
+                    "Risk Analyzer",
+                    risk_analysis,
+                    proposal_text
+                )
 
-            if ws:
-                await ws.send_json({
-                    "status": "interrupt",
-                    "message": "리스크 분석 결과를 확인하고 피드백을 제공해주세요",
-                    "results": {
-                        "risk_analysis": risk_analysis,
-                        "feedback_suggestion": feedback_suggestion
-                    }
-                })
+                if ws:
+                    await ws.send_json({
+                        "status": "interrupt",
+                        "message": f"리스크 분석 결과를 확인하고 피드백을 제공해주세요 (재시도 {hitl_retry_counts[agent_num]}/{MAX_HITL_RETRIES})",
+                        "results": {
+                            "risk_analysis": risk_analysis,
+                            "feedback_suggestion": feedback_suggestion
+                        }
+                    })
 
-            # 피드백 대기
-            await wait_for_feedback(job_id)
+                await wait_for_feedback(job_id)
 
-            # 피드백 받은 후 계속 진행
+                job = get_job(job_id)
+                user_feedback = job.get("feedback", "")
+
+                retry_decision = await asyncio.to_thread(
+                    analyze_feedback_for_retry,
+                    user_feedback,
+                    "Risk Analyzer"
+                )
+
+                print(f"[DEBUG] Retry decision for Agent 4: {retry_decision}")
+
+                if retry_decision.get("needs_retry") and hitl_retry_counts[agent_num] < MAX_HITL_RETRIES:
+                    hitl_retry_counts[agent_num] += 1
+                    print(f"[DEBUG] Agent 4 재시도 {hitl_retry_counts[agent_num]}/{MAX_HITL_RETRIES}")
+
+                    if ws:
+                        await ws.send_json({
+                            "status": "processing",
+                            "agent": "Risk_Analyzer",
+                            "message": f"추가 정보 반영하여 재검토 중... ({hitl_retry_counts[agent_num]}/{MAX_HITL_RETRIES})"
+                        })
+
+                    retry_prompt = f"""당신은 AI 프로젝트의 리스크 분석 전문가입니다.
+이전 분석에 대한 사용자 피드백을 반영하여 재분석해주세요.
+
+제안서 내용:
+{proposal_text}
+
+이전 분석 결과:
+{risk_analysis}
+
+사용자 피드백:
+{user_feedback}
+
+필요한 추가 정보: {', '.join(retry_decision.get('additional_info_needed', []))}
+
+피드백을 반영하여 다음 리스크를 재평가하고 각각 짧게 요약해주세요:
+1. 기술적 리스크
+2. 일정 리스크
+3. 인력 리스크
+
+각 항목마다 1-2문장으로 평가 결과를 작성해주세요."""
+
+                    risk_analysis = await asyncio.to_thread(call_ollama, retry_prompt)
+
+                    if ws:
+                        await ws.send_json({
+                            "status": "completed",
+                            "agent": "Risk_Analyzer",
+                            "message": "재분석 완료"
+                        })
+
+                    continue
+                else:
+                    if hitl_retry_counts[agent_num] >= MAX_HITL_RETRIES:
+                        print(f"[DEBUG] Agent 4 최대 재시도 횟수 도달")
+                        if ws:
+                            await ws.send_json({
+                                "status": "processing",
+                                "agent": "Risk_Analyzer",
+                                "message": "최대 재시도 횟수 도달, 다음 단계로 진행합니다"
+                            })
+                    break
+
             if ws:
                 await ws.send_json({"status": "processing", "agent": "ROI_Estimator", "message": "피드백 반영하여 분석 계속 진행..."})
             await asyncio.sleep(1)
@@ -542,28 +801,90 @@ async def process_review(job_id: int):
 
         # HITL 인터럽트: Agent 5 이후 (설정에 따라)
         if 5 in hitl_stages:
-            # 피드백 제안 생성
-            feedback_suggestion = await asyncio.to_thread(
-                generate_feedback_suggestion,
-                "ROI Estimator",
-                roi_estimation,
-                proposal_text
-            )
+            agent_num = 5
+            while True:
+                feedback_suggestion = await asyncio.to_thread(
+                    generate_feedback_suggestion,
+                    "ROI Estimator",
+                    roi_estimation,
+                    proposal_text
+                )
 
-            if ws:
-                await ws.send_json({
-                    "status": "interrupt",
-                    "message": "ROI 추정 결과를 확인하고 피드백을 제공해주세요",
-                    "results": {
-                        "roi_estimation": roi_estimation,
-                        "feedback_suggestion": feedback_suggestion
-                    }
-                })
+                if ws:
+                    await ws.send_json({
+                        "status": "interrupt",
+                        "message": f"ROI 추정 결과를 확인하고 피드백을 제공해주세요 (재시도 {hitl_retry_counts[agent_num]}/{MAX_HITL_RETRIES})",
+                        "results": {
+                            "roi_estimation": roi_estimation,
+                            "feedback_suggestion": feedback_suggestion
+                        }
+                    })
 
-            # 피드백 대기
-            await wait_for_feedback(job_id)
+                await wait_for_feedback(job_id)
 
-            # 피드백 받은 후 계속 진행
+                job = get_job(job_id)
+                user_feedback = job.get("feedback", "")
+
+                retry_decision = await asyncio.to_thread(
+                    analyze_feedback_for_retry,
+                    user_feedback,
+                    "ROI Estimator"
+                )
+
+                print(f"[DEBUG] Retry decision for Agent 5: {retry_decision}")
+
+                if retry_decision.get("needs_retry") and hitl_retry_counts[agent_num] < MAX_HITL_RETRIES:
+                    hitl_retry_counts[agent_num] += 1
+                    print(f"[DEBUG] Agent 5 재시도 {hitl_retry_counts[agent_num]}/{MAX_HITL_RETRIES}")
+
+                    if ws:
+                        await ws.send_json({
+                            "status": "processing",
+                            "agent": "ROI_Estimator",
+                            "message": f"추가 정보 반영하여 재검토 중... ({hitl_retry_counts[agent_num]}/{MAX_HITL_RETRIES})"
+                        })
+
+                    retry_prompt = f"""당신은 AI 프로젝트의 ROI(투자 수익률) 분석 전문가입니다.
+이전 분석에 대한 사용자 피드백을 반영하여 ROI를 재추정해주세요.
+
+제안서 내용:
+{proposal_text}
+
+이전 분석 결과:
+{roi_estimation}
+
+사용자 피드백:
+{user_feedback}
+
+필요한 추가 정보: {', '.join(retry_decision.get('additional_info_needed', []))}
+
+피드백을 반영하여 다음 항목을 재평가하고 짧게 요약해주세요:
+1. 예상 효과 (비용 절감, 생산성 향상 등)
+2. 투자 대비 효과 (ROI 퍼센티지, 손익분기점)
+
+간결하게 2-3문장으로 평가 결과를 작성해주세요."""
+
+                    roi_estimation = await asyncio.to_thread(call_ollama, retry_prompt)
+
+                    if ws:
+                        await ws.send_json({
+                            "status": "completed",
+                            "agent": "ROI_Estimator",
+                            "message": "재추정 완료"
+                        })
+
+                    continue
+                else:
+                    if hitl_retry_counts[agent_num] >= MAX_HITL_RETRIES:
+                        print(f"[DEBUG] Agent 5 최대 재시도 횟수 도달")
+                        if ws:
+                            await ws.send_json({
+                                "status": "processing",
+                                "agent": "ROI_Estimator",
+                                "message": "최대 재시도 횟수 도달, 다음 단계로 진행합니다"
+                            })
+                    break
+
             if ws:
                 await ws.send_json({"status": "processing", "agent": "Final_Generator", "message": "피드백 반영하여 최종 보고서 생성 중..."})
             await asyncio.sleep(1)
@@ -605,30 +926,105 @@ ROI 추정:
 
         # HITL 인터럽트: Agent 6 이후 (설정에 따라)
         if 6 in hitl_stages:
-            # 피드백 제안 생성
-            feedback_suggestion = await asyncio.to_thread(
-                generate_feedback_suggestion,
-                "Final Generator",
-                final_recommendation,
-                proposal_text
-            )
-            print(f"[DEBUG] Sending HITL interrupt with feedback_suggestion: {len(feedback_suggestion)} chars")
+            agent_num = 6
+            while True:
+                feedback_suggestion = await asyncio.to_thread(
+                    generate_feedback_suggestion,
+                    "Final Generator",
+                    final_recommendation,
+                    proposal_text
+                )
+                print(f"[DEBUG] Sending HITL interrupt with feedback_suggestion: {len(feedback_suggestion)} chars")
 
-            if ws:
-                await ws.send_json({
-                    "status": "interrupt",
-                    "message": "최종 의견을 확인하고 피드백을 제공해주세요",
-                    "results": {
-                        "final_recommendation": final_recommendation,
-                        "feedback_suggestion": feedback_suggestion
-                    }
-                })
-                print(f"[DEBUG] HITL interrupt sent via WebSocket")
+                if ws:
+                    await ws.send_json({
+                        "status": "interrupt",
+                        "message": f"최종 의견을 확인하고 피드백을 제공해주세요 (재시도 {hitl_retry_counts[agent_num]}/{MAX_HITL_RETRIES})",
+                        "results": {
+                            "final_recommendation": final_recommendation,
+                            "feedback_suggestion": feedback_suggestion
+                        }
+                    })
+                    print(f"[DEBUG] HITL interrupt sent via WebSocket")
 
-            # 피드백 대기
-            await wait_for_feedback(job_id)
+                await wait_for_feedback(job_id)
 
-            # 피드백 받은 후 보고서 생성
+                job = get_job(job_id)
+                user_feedback = job.get("feedback", "")
+
+                retry_decision = await asyncio.to_thread(
+                    analyze_feedback_for_retry,
+                    user_feedback,
+                    "Final Generator"
+                )
+
+                print(f"[DEBUG] Retry decision for Agent 6: {retry_decision}")
+
+                if retry_decision.get("needs_retry") and hitl_retry_counts[agent_num] < MAX_HITL_RETRIES:
+                    hitl_retry_counts[agent_num] += 1
+                    print(f"[DEBUG] Agent 6 재시도 {hitl_retry_counts[agent_num]}/{MAX_HITL_RETRIES}")
+
+                    if ws:
+                        await ws.send_json({
+                            "status": "processing",
+                            "agent": "Final_Generator",
+                            "message": f"추가 정보 반영하여 재검토 중... ({hitl_retry_counts[agent_num]}/{MAX_HITL_RETRIES})"
+                        })
+
+                    retry_prompt = f"""당신은 AI 프로젝트 검토 전문가입니다.
+이전 최종 의견에 대한 사용자 피드백을 반영하여 최종 의견을 재작성해주세요.
+
+제안서 내용:
+{proposal_text}
+
+목표 검토:
+{objective_review}
+
+데이터 분석:
+{data_analysis}
+
+리스크 분석:
+{risk_analysis}
+
+ROI 추정:
+{roi_estimation}
+
+이전 최종 의견:
+{final_recommendation}
+
+사용자 피드백:
+{user_feedback}
+
+필요한 추가 정보: {', '.join(retry_decision.get('additional_info_needed', []))}
+
+피드백을 반영하여 다음을 포함한 최종 의견을 재작성해주세요:
+1. 승인 또는 보류 권장 (명확하게)
+2. 주요 근거 (3-4가지)
+3. 권장사항 (2-3가지)
+
+간결하게 5-7문장으로 작성해주세요."""
+
+                    final_recommendation = await asyncio.to_thread(call_ollama, retry_prompt)
+
+                    if ws:
+                        await ws.send_json({
+                            "status": "completed",
+                            "agent": "Final_Generator",
+                            "message": "재검토 완료"
+                        })
+
+                    continue
+                else:
+                    if hitl_retry_counts[agent_num] >= MAX_HITL_RETRIES:
+                        print(f"[DEBUG] Agent 6 최대 재시도 횟수 도달")
+                        if ws:
+                            await ws.send_json({
+                                "status": "processing",
+                                "agent": "Final_Generator",
+                                "message": "최대 재시도 횟수 도달, 최종 보고서를 생성합니다"
+                            })
+                    break
+
             if ws:
                 await ws.send_json({"status": "processing", "message": "피드백 반영하여 최종 보고서 생성 중..."})
             await asyncio.sleep(1)
