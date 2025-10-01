@@ -5,3 +5,5 @@ data/review.db
 nul
 pytest.ini
 .env
+AGENTS.md
+__pycache__

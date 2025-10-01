@@ -102,7 +102,10 @@ def get_job(job_id: int):
             "division": row[4],
             "metadata": metadata,
             "hitl_stages": metadata.get("hitl_stages", []),
-            "feedback": metadata.get("feedback", "")  # 피드백 추가
+            "feedback": metadata.get("feedback", ""),  # 피드백 추가
+            "feedback_skip": metadata.get("feedback_skip", False),
+            "feedback_history": metadata.get("feedback_history", []),
+            "report": metadata.get("report")
         }
     return None
 
@@ -127,7 +130,7 @@ def update_job_status(job_id: int, status: str, metadata: dict = None):
     conn.commit()
     conn.close()
 
-def update_job_feedback(job_id: int, feedback: str):
+def update_job_feedback(job_id: int, feedback: str, skip: bool = False):
     """작업에 피드백 저장 (메타데이터에 저장)"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -138,7 +141,14 @@ def update_job_feedback(job_id: int, feedback: str):
 
     if row:
         metadata = json.loads(row[0]) if row[0] else {}
+        metadata.setdefault("feedback_history", []).append({
+            "timestamp": datetime.utcnow().isoformat(),
+            "feedback": feedback,
+            "skip": bool(skip)
+        })
+
         metadata["feedback"] = feedback
+        metadata["feedback_skip"] = bool(skip)
 
         cursor.execute("""
             UPDATE review_jobs
@@ -147,6 +157,35 @@ def update_job_feedback(job_id: int, feedback: str):
         """, (json.dumps(metadata), job_id))
 
         conn.commit()
+
+    conn.close()
+
+def reset_feedback_state(job_id: int):
+    """HITL 피드백 상태 초기화"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT metadata FROM review_jobs WHERE id = ?", (job_id,))
+    row = cursor.fetchone()
+
+    if row:
+        metadata = json.loads(row[0]) if row[0] else {}
+        updated = False
+
+        if "feedback" in metadata:
+            metadata.pop("feedback", None)
+            updated = True
+        if "feedback_skip" in metadata:
+            metadata.pop("feedback_skip", None)
+            updated = True
+
+        if updated:
+            cursor.execute("""
+                UPDATE review_jobs
+                SET metadata = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            """, (json.dumps(metadata), job_id))
+            conn.commit()
 
     conn.close()
 

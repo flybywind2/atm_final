@@ -13,8 +13,9 @@ import json
 import requests
 from dotenv import load_dotenv
 
-from database.db import init_database, create_job, get_job, update_job_status, update_job_feedback
+from database.db import init_database, create_job, get_job, update_job_status, update_job_feedback, reset_feedback_state
 from config.settings import HOST, PORT
+from confluence_api import get_page_content, get_child_pages, get_pages_recursively, combine_pages_content
 
 # 환경 변수 로드
 load_dotenv()
@@ -398,10 +399,93 @@ async def wait_for_feedback(job_id: int, timeout_seconds: int = 300):
     print(f"Job {job_id}: Timeout waiting for feedback, continuing anyway...")
     return False
 
-async def process_review(job_id: int):
+async def process_confluence_pages_sequentially(job_ids: list, page_list: list):
+    """Confluence 페이지들을 순차적으로 처리"""
+    print(f"=== Sequential processing started for {len(job_ids)} pages ===")
+
+    all_reports = []
+    main_job_id = job_ids[0]  # 첫 번째 job_id를 메인 WebSocket으로 사용
+    main_ws_key = str(main_job_id)  # WebSocket dict는 문자열 키를 사용
+
+    for idx, job_id in enumerate(job_ids):
+        page_info = page_list[idx]
+        print(f"\n{'='*80}")
+        print(f"Processing page {idx+1}/{len(job_ids)}: {page_info['title']} (Job ID: {job_id})")
+        print(f"{'='*80}\n")
+
+        # UI에 현재 처리 중인 페이지 알림
+        if main_ws_key in active_connections:
+            await active_connections[main_ws_key].send_json({
+                "type": "page_progress",
+                "current_page": idx + 1,
+                "total_pages": len(job_ids),
+                "page_title": page_info['title'],
+                "page_id": page_info['id'],
+                "job_id": job_id,
+                "status": "processing",
+                "message": f"📄 페이지 {idx+1}/{len(job_ids)} 분석 중: {page_info['title']}",
+                "reset_agents": idx > 0
+            })
+
+        # 각 페이지 처리 (6개 에이전트 전체 플로우)
+        await process_review(
+            job_id,
+            ws_job_key=main_ws_key,
+            send_final_report=False
+        )
+
+        # 처리 완료된 job의 최종 report 가져오기
+        job_data = get_job(job_id)
+        if job_data and job_data.get('report'):
+            all_reports.append({
+                "page_title": page_info['title'],
+                "page_id": page_info['id'],
+                "job_id": job_id,
+                "report": job_data['report']
+            })
+
+        # UI에 페이지 완료 알림
+        if main_ws_key in active_connections:
+            await active_connections[main_ws_key].send_json({
+                "type": "page_progress",
+                "current_page": idx + 1,
+                "total_pages": len(job_ids),
+                "page_title": page_info['title'],
+                "page_id": page_info['id'],
+                "job_id": job_id,
+                "status": "completed",
+                "message": f"✅ 페이지 {idx+1}/{len(job_ids)} 완료: {page_info['title']}"
+            })
+
+        print(f"\n✅ Completed page {idx+1}/{len(job_ids)}: {page_info['title']}\n")
+
+    # 모든 페이지 처리 완료 후 통합 리포트 생성
+    print(f"\n{'='*80}")
+    print(f"All {len(job_ids)} pages processed successfully")
+    print(f"{'='*80}\n")
+
+    # 첫 번째 job의 WebSocket으로 최종 완료 알림
+    if job_ids and str(job_ids[0]) in active_connections:
+        combined_report = "# 📚 Confluence 페이지별 검토 결과\n\n"
+        combined_report += f"**총 {len(all_reports)}개 페이지 분석 완료**\n\n"
+        combined_report += "---\n\n"
+
+        for idx, report_data in enumerate(all_reports, 1):
+            combined_report += f"## {idx}. {report_data['page_title']}\n\n"
+            combined_report += report_data['report']
+            combined_report += "\n\n---\n\n"
+
+        await active_connections[str(job_ids[0])].send_json({
+            "status": "completed",
+            "report": combined_report,
+            "page_count": len(all_reports)
+        })
+
+async def process_review(job_id: int, ws_job_key: str | None = None, send_final_report: bool = True):
     """백그라운드 검토 프로세스 - 6개 에이전트 전체 플로우"""
     print(f"=== process_review ENTRY for job {job_id} ===")
     ws = None
+    ws_key = ws_job_key or str(job_id)
     try:
         print(f"process_review started for job {job_id}")
         job = get_job(job_id)
@@ -420,7 +504,7 @@ async def process_review(job_id: int):
 
         # Wait for WebSocket connection (up to 3 seconds)
         for i in range(30):
-            ws = active_connections.get(str(job_id))
+            ws = active_connections.get(ws_key)
             if ws:
                 print(f"WebSocket connected on attempt {i+1}")
                 break
@@ -500,6 +584,7 @@ async def process_review(job_id: int):
                 if ws:
                     await ws.send_json({
                         "status": "interrupt",
+                        "job_id": job_id,
                         "message": f"검토 결과를 확인해주세요 (재시도 {hitl_retry_counts[agent_num]}/{MAX_HITL_RETRIES}) - 품질: {quality_check.get('reason', '')}",
                         "results": {
                             "objective_review": objective_review,
@@ -513,45 +598,17 @@ async def process_review(job_id: int):
 
                 # 사용자 피드백 가져오기
                 updated_job = get_job(job_id)
-                user_feedback = updated_job.get("feedback", "").strip()
+                skip_requested = updated_job.get("feedback_skip", False)
+                user_feedback = (updated_job.get("feedback") or "").strip()
 
-                print(f"[DEBUG] User feedback retrieved: '{user_feedback}'")
+                print(f"[DEBUG] User feedback retrieved: '{user_feedback}' (skip={skip_requested})")
 
-                # 사용자 피드백이 있으면 LLM이 재시도 필요성 분석
-                if user_feedback:
-                    feedback_analysis_prompt = f"""당신은 AI 검토 프로세스의 orchestrator입니다.
-사용자가 다음과 같은 피드백을 제공했습니다:
-
-사용자 피드백: {user_feedback}
-
-이전 분석 결과:
-{objective_review}
-
-사용자 피드백을 보고 재검토가 필요한지 판단해주세요.
-
-**재검토가 필요한 경우 (needs_retry = true):**
-- 사용자가 추가 정보, 더 자세한 분석, 보완을 요청한 경우
-- 피드백에 "더", "추가", "보완", "재검토", "다시" 등의 키워드가 있는 경우
-
-**재검토가 불필요한 경우 (needs_retry = false):**
-- 피드백이 없거나 빈 문자열인 경우
-- "좋다", "승인", "확인", "다음" 등 긍정적 피드백만 있는 경우
-
-반드시 다음 JSON 형식으로만 응답하세요:
-{{"needs_retry": true/false, "reason": "...", "additional_info_needed": [...]}}"""
-
-                    retry_decision = await asyncio.to_thread(call_ollama, feedback_analysis_prompt)
-
-                    # JSON 파싱
-                    try:
-                        import re
-                        json_match = re.search(r'\{.*\}', retry_decision, re.DOTALL)
-                        if json_match:
-                            retry_decision = json.loads(json_match.group())
-                        else:
-                            retry_decision = {"needs_retry": True, "reason": "피드백 분석"}
-                    except:
-                        retry_decision = {"needs_retry": True, "reason": "피드백 분석"}
+                if skip_requested:
+                    retry_decision = {"needs_retry": False, "reason": "사용자가 건너뛰기를 선택"}
+                    reset_feedback_state(job_id)
+                elif user_feedback:
+                    retry_decision = {"needs_retry": False, "reason": "사용자 피드백 반영"}
+                    reset_feedback_state(job_id)
                 else:
                     # 피드백이 없으면 품질 검사 결과 사용
                     retry_decision = quality_check
@@ -667,6 +724,7 @@ async def process_review(job_id: int):
                 if ws:
                     await ws.send_json({
                         "status": "interrupt",
+                        "job_id": job_id,
                         "message": f"데이터 분석 결과 확인 중... (재시도 {hitl_retry_counts[agent_num]}/{MAX_HITL_RETRIES}) - {quality_check.get('reason', '')}",
                         "results": {
                             "data_analysis": data_analysis,
@@ -680,45 +738,17 @@ async def process_review(job_id: int):
 
                 # 사용자 피드백 가져오기
                 updated_job = get_job(job_id)
-                user_feedback = updated_job.get("feedback", "").strip()
+                skip_requested = updated_job.get("feedback_skip", False)
+                user_feedback = (updated_job.get("feedback") or "").strip()
 
-                print(f"[DEBUG] User feedback retrieved: '{user_feedback}'")
+                print(f"[DEBUG] User feedback retrieved: '{user_feedback}' (skip={skip_requested})")
 
-                # 사용자 피드백이 있으면 LLM이 재시도 필요성 분석
-                if user_feedback:
-                    feedback_analysis_prompt = f"""당신은 AI 검토 프로세스의 orchestrator입니다.
-사용자가 다음과 같은 피드백을 제공했습니다:
-
-사용자 피드백: {user_feedback}
-
-이전 분석 결과:
-{data_analysis}
-
-사용자 피드백을 보고 재검토가 필요한지 판단해주세요.
-
-**재검토가 필요한 경우 (needs_retry = true):**
-- 사용자가 추가 정보, 더 자세한 분석, 보완을 요청한 경우
-- 피드백에 "더", "추가", "보완", "재검토", "다시" 등의 키워드가 있는 경우
-
-**재검토가 불필요한 경우 (needs_retry = false):**
-- 피드백이 없거나 빈 문자열인 경우
-- "좋다", "승인", "확인", "다음" 등 긍정적 피드백만 있는 경우
-
-반드시 다음 JSON 형식으로만 응답하세요:
-{{"needs_retry": true/false, "reason": "...", "additional_info_needed": [...]}}"""
-
-                    retry_decision = await asyncio.to_thread(call_ollama, feedback_analysis_prompt)
-
-                    # JSON 파싱
-                    try:
-                        import re
-                        json_match = re.search(r'\{.*\}', retry_decision, re.DOTALL)
-                        if json_match:
-                            retry_decision = json.loads(json_match.group())
-                        else:
-                            retry_decision = {"needs_retry": True, "reason": "피드백 분석"}
-                    except:
-                        retry_decision = {"needs_retry": True, "reason": "피드백 분석"}
+                if skip_requested:
+                    retry_decision = {"needs_retry": False, "reason": "사용자가 건너뛰기를 선택"}
+                    reset_feedback_state(job_id)
+                elif user_feedback:
+                    retry_decision = {"needs_retry": False, "reason": "사용자 피드백 반영"}
+                    reset_feedback_state(job_id)
                 else:
                     # 피드백이 없으면 품질 검사 결과 사용
                     retry_decision = quality_check
@@ -826,6 +856,7 @@ async def process_review(job_id: int):
                 if ws:
                     await ws.send_json({
                         "status": "interrupt",
+                        "job_id": job_id,
                         "message": f"리스크 분석 결과 확인 중... (재시도 {hitl_retry_counts[agent_num]}/{MAX_HITL_RETRIES}) - {quality_check.get('reason', '')}",
                         "results": {
                             "risk_analysis": risk_analysis,
@@ -837,7 +868,19 @@ async def process_review(job_id: int):
                 # 사용자가 결과를 확인할 때까지 대기
                 await wait_for_feedback(job_id)
 
-                retry_decision = quality_check
+                updated_job = get_job(job_id)
+                skip_requested = updated_job.get("feedback_skip", False)
+                user_feedback = (updated_job.get("feedback") or "").strip()
+
+                if skip_requested:
+                    retry_decision = {"needs_retry": False, "reason": "사용자가 건너뛰기를 선택"}
+                    reset_feedback_state(job_id)
+                elif user_feedback:
+                    retry_decision = {"needs_retry": False, "reason": "사용자 피드백 반영"}
+                    reset_feedback_state(job_id)
+                else:
+                    retry_decision = quality_check
+
                 print(f"[DEBUG] Retry decision for Agent 4: {retry_decision}")
 
                 if retry_decision.get("needs_retry") and hitl_retry_counts[agent_num] < MAX_HITL_RETRIES:
@@ -940,6 +983,7 @@ async def process_review(job_id: int):
                 if ws:
                     await ws.send_json({
                         "status": "interrupt",
+                        "job_id": job_id,
                         "message": f"ROI 추정 결과 확인 중... (재시도 {hitl_retry_counts[agent_num]}/{MAX_HITL_RETRIES}) - {quality_check.get('reason', '')}",
                         "results": {
                             "roi_estimation": roi_estimation,
@@ -951,7 +995,19 @@ async def process_review(job_id: int):
                 # 사용자가 결과를 확인할 때까지 대기
                 await wait_for_feedback(job_id)
 
-                retry_decision = quality_check
+                updated_job = get_job(job_id)
+                skip_requested = updated_job.get("feedback_skip", False)
+                user_feedback = (updated_job.get("feedback") or "").strip()
+
+                if skip_requested:
+                    retry_decision = {"needs_retry": False, "reason": "사용자가 건너뛰기를 선택"}
+                    reset_feedback_state(job_id)
+                elif user_feedback:
+                    retry_decision = {"needs_retry": False, "reason": "사용자 피드백 반영"}
+                    reset_feedback_state(job_id)
+                else:
+                    retry_decision = quality_check
+
                 print(f"[DEBUG] Retry decision for Agent 5: {retry_decision}")
 
                 if retry_decision.get("needs_retry") and hitl_retry_counts[agent_num] < MAX_HITL_RETRIES:
@@ -1066,6 +1122,7 @@ ROI 추정:
                 if ws:
                     await ws.send_json({
                         "status": "interrupt",
+                        "job_id": job_id,
                         "message": f"최종 의견 확인 중... (재시도 {hitl_retry_counts[agent_num]}/{MAX_HITL_RETRIES}) - {quality_check.get('reason', '')}",
                         "results": {
                             "final_recommendation": final_recommendation,
@@ -1077,7 +1134,19 @@ ROI 추정:
                 # 사용자가 결과를 확인할 때까지 대기
                 await wait_for_feedback(job_id)
 
-                retry_decision = quality_check
+                updated_job = get_job(job_id)
+                skip_requested = updated_job.get("feedback_skip", False)
+                user_feedback = (updated_job.get("feedback") or "").strip()
+
+                if skip_requested:
+                    retry_decision = {"needs_retry": False, "reason": "사용자가 건너뛰기를 선택"}
+                    reset_feedback_state(job_id)
+                elif user_feedback:
+                    retry_decision = {"needs_retry": False, "reason": "사용자 피드백 반영"}
+                    reset_feedback_state(job_id)
+                else:
+                    retry_decision = quality_check
+
                 print(f"[DEBUG] Retry decision for Agent 6: {retry_decision}")
 
                 if retry_decision.get("needs_retry") and hitl_retry_counts[agent_num] < MAX_HITL_RETRIES:
@@ -1220,14 +1289,20 @@ ROI 추정:
         </div>
         """
 
-        if ws:
-            await ws.send_json({
-                "status": "completed",
-                "agent": "Final_Generator",
-                "message": "검토 완료",
-                "report": final_report
-            })
-        update_job_status(job_id, "completed")
+        if send_final_report:
+            target_ws = ws or active_connections.get(ws_key)
+            if target_ws:
+                await target_ws.send_json({
+                    "status": "completed",
+                    "agent": "Final_Generator",
+                    "message": "검토 완료",
+                    "report": final_report
+                })
+
+        latest_job = get_job(job_id) or {}
+        metadata = latest_job.get("metadata", {}).copy()
+        metadata["report"] = final_report
+        update_job_status(job_id, "completed", metadata=metadata)
 
     except Exception as e:
         print(f"!!! ERROR in review process: {e}")
@@ -1268,24 +1343,193 @@ async def submit_feedback(job_id: int, feedback: dict):
     print(f"[DEBUG] Feedback received (Job {job_id}): {feedback}")
 
     # 피드백 텍스트 추출
-    feedback_text = feedback.get("feedback", "")
+    feedback_text = feedback.get("feedback", "") or ""
+    if isinstance(feedback_text, str):
+        feedback_text = feedback_text.strip()
+    else:
+        feedback_text = str(feedback_text)
+
+    skip_requested = bool(feedback.get("skip"))
     print(f"[DEBUG] Feedback text: {feedback_text}")
+    print(f"[DEBUG] Skip requested: {skip_requested}")
 
     # 피드백을 job의 metadata에 저장
-    update_job_feedback(job_id, feedback_text)
+    update_job_feedback(job_id, feedback_text, skip=skip_requested)
 
     # DB 상태를 feedback_received로 업데이트
     update_job_status(job_id, "feedback_received")
 
     print(f"[DEBUG] Feedback saved and status updated for job {job_id}")
 
-    return {"status": "feedback_received", "job_id": job_id}
+    return {"status": "feedback_received", "job_id": job_id, "skip": skip_requested}
 
 @app.get("/api/v1/review/pdf/{job_id}")
 async def download_pdf(job_id: int):
     """PDF 다운로드"""
     # MVP: 간단한 응답
     return {"message": "PDF 생성 기능은 추후 구현 예정", "job_id": job_id}
+
+# ==================== Confluence API 엔드포인트 ====================
+
+@app.post("/api/v1/confluence/fetch-pages")
+async def fetch_confluence_pages(
+    page_id: str = Form(...),
+    include_children: bool = Form(True),
+    include_current: bool = Form(True),
+    max_depth: int = Form(2)
+):
+    """
+    Confluence 페이지 가져오기
+    - page_id: Confluence 페이지 ID
+    - include_children: 하위 페이지 포함 여부
+    - include_current: 현재 페이지 포함 여부
+    - max_depth: 하위 페이지 탐색 깊이 (1-5)
+    """
+    try:
+        if not page_id:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "page_id가 필요합니다"}
+            )
+
+        # 깊이 제한
+        max_depth = max(1, min(max_depth, 5))
+
+        if include_children:
+            # 재귀적으로 페이지 가져오기
+            pages = await asyncio.to_thread(
+                get_pages_recursively,
+                page_id,
+                include_current=include_current,
+                max_depth=max_depth,
+                current_depth=0
+            )
+        else:
+            # 현재 페이지만 가져오기
+            page = await asyncio.to_thread(get_page_content, page_id)
+            pages = [page] if page else []
+
+        if not pages:
+            return JSONResponse(
+                status_code=404,
+                content={"error": "페이지를 찾을 수 없습니다"}
+            )
+
+        # 페이지 정보 요약
+        page_summaries = [
+            {
+                "id": p.get("id"),
+                "title": p.get("title"),
+                "content_length": len(p.get("content", "")),
+                "space": p.get("space")
+            }
+            for p in pages
+        ]
+
+        return {
+            "status": "success",
+            "page_count": len(pages),
+            "pages": page_summaries,
+            "combined_content_length": sum(len(p.get("content", "")) for p in pages)
+        }
+
+    except Exception as e:
+        print(f"Confluence 페이지 가져오기 실패: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"페이지 가져오기 실패: {str(e)}"}
+        )
+
+@app.post("/api/v1/confluence/submit-for-review")
+async def submit_confluence_for_review(
+    page_id: str = Form(...),
+    include_children: bool = Form(True),
+    include_current: bool = Form(True),
+    max_depth: int = Form(2),
+    domain: str = Form("제조"),
+    division: str = Form("메모리"),
+    hitl_stages: str = Form("[]")
+):
+    """
+    Confluence 페이지를 가져와서 검토 시작
+    """
+    try:
+        # 깊이 제한
+        max_depth = max(1, min(max_depth, 5))
+
+        # 페이지 가져오기
+        if include_children:
+            pages = await asyncio.to_thread(
+                get_pages_recursively,
+                page_id,
+                include_current=include_current,
+                max_depth=max_depth,
+                current_depth=0
+            )
+        else:
+            page = await asyncio.to_thread(get_page_content, page_id)
+            pages = [page] if page else []
+
+        if not pages:
+            return JSONResponse(
+                status_code=404,
+                content={"error": "페이지를 찾을 수 없습니다"}
+            )
+
+        # HITL 단계 파싱
+        try:
+            hitl_stages_list = json.loads(hitl_stages)
+        except:
+            hitl_stages_list = []
+
+        # 각 페이지별로 job 생성 및 순차 처리
+        job_ids = []
+        page_list = [{"id": p.get("id"), "title": p.get("title")} for p in pages]
+
+        for idx, page in enumerate(pages):
+            page_content = f"{'='*80}\n페이지: {page.get('title')}\nID: {page.get('id')}\n{'='*80}\n{page.get('content')}"
+            job_id = create_job(page_content, domain, division, hitl_stages=hitl_stages_list)
+            job_ids.append(job_id)
+            print(f"Created job {job_id} for page {idx+1}/{len(pages)}: {page.get('title')}")
+
+        # 첫 번째 페이지부터 순차적으로 처리 시작
+        print(f"Starting sequential processing for {len(job_ids)} pages")
+        asyncio.create_task(process_confluence_pages_sequentially(job_ids, page_list))
+
+        return {
+            "status": "submitted",
+            "job_id": job_ids[0],  # 첫 번째 job_id를 메인으로 사용
+            "job_ids": job_ids,
+            "page_count": len(pages),
+            "pages": page_list
+        }
+
+    except Exception as e:
+        print(f"Confluence 검토 제출 실패: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"검토 제출 실패: {str(e)}"}
+        )
+
+@app.get("/api/v1/confluence/child-pages/{page_id}")
+async def get_confluence_child_pages(page_id: str):
+    """특정 페이지의 하위 페이지 목록 조회"""
+    try:
+        children = await asyncio.to_thread(get_child_pages, page_id)
+
+        return {
+            "status": "success",
+            "page_id": page_id,
+            "child_count": len(children),
+            "children": children
+        }
+
+    except Exception as e:
+        print(f"하위 페이지 조회 실패: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"하위 페이지 조회 실패: {str(e)}"}
+        )
 
 if __name__ == "__main__":
     print(f"Server starting at http://{HOST}:{PORT}")

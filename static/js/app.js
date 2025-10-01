@@ -1,6 +1,16 @@
 // static/js/app.js - 메인 애플리케이션 로직
 let currentJobId = null;
 let wsConnection = null;
+let activeFeedbackJobId = null;
+
+const AGENT_STATUS_IDS = [
+    'agent-1-status',
+    'agent-2-status',
+    'agent-3-status',
+    'agent-4-status',
+    'agent-5-status',
+    'agent-6-status'
+];
 
 // Floating BP Panel - Drag functionality
 let isDragging = false;
@@ -79,14 +89,67 @@ closeBtn.addEventListener('click', () => {
 document.querySelectorAll('input[name="input-type"]').forEach(radio => {
     radio.addEventListener('change', (e) => {
         const inputType = e.target.value;
+        document.getElementById('file-upload-container').style.display = 'none';
+        document.getElementById('text-input-container').style.display = 'none';
+        document.getElementById('confluence-input-container').style.display = 'none';
+
         if (inputType === 'file') {
             document.getElementById('file-upload-container').style.display = 'block';
-            document.getElementById('text-input-container').style.display = 'none';
-        } else {
-            document.getElementById('file-upload-container').style.display = 'none';
+        } else if (inputType === 'text') {
             document.getElementById('text-input-container').style.display = 'block';
+        } else if (inputType === 'confluence') {
+            document.getElementById('confluence-input-container').style.display = 'block';
         }
     });
+});
+
+// Confluence 페이지 미리보기
+document.getElementById('preview-confluence-btn').addEventListener('click', async () => {
+    const pageId = document.getElementById('confluence-page-id').value.trim();
+    const includeChildren = document.getElementById('include-child-pages').checked;
+    const includeCurrent = document.getElementById('include-current-page').checked;
+    const maxDepth = document.getElementById('max-depth').value;
+
+    if (!pageId) {
+        alert('Confluence 페이지 ID를 입력해주세요');
+        return;
+    }
+
+    try {
+        const formData = new FormData();
+        formData.append('page_id', pageId);
+        formData.append('include_children', includeChildren);
+        formData.append('include_current', includeCurrent);
+        formData.append('max_depth', maxDepth);
+
+        const response = await fetch('/api/v1/confluence/fetch-pages', {
+            method: 'POST',
+            body: formData
+        });
+
+        const result = await response.json();
+
+        if (response.ok) {
+            // 미리보기 표시
+            const previewDiv = document.getElementById('confluence-preview');
+            const contentDiv = document.getElementById('confluence-preview-content');
+
+            let html = `<p><strong>총 ${result.page_count}개 페이지</strong> (전체 내용: ${result.combined_content_length.toLocaleString()} 자)</p>`;
+            html += '<ul style="margin: 0; padding-left: 20px;">';
+            result.pages.forEach((page, idx) => {
+                html += `<li>${idx + 1}. ${page.title} (ID: ${page.id}, ${page.content_length.toLocaleString()} 자)</li>`;
+            });
+            html += '</ul>';
+
+            contentDiv.innerHTML = html;
+            previewDiv.style.display = 'block';
+        } else {
+            alert('페이지를 가져올 수 없습니다: ' + result.error);
+        }
+    } catch (error) {
+        console.error('❌ Preview error:', error);
+        alert('미리보기 중 오류 발생: ' + error.message);
+    }
 });
 
 // 제안서 제출 및 검토 시작
@@ -104,6 +167,8 @@ document.getElementById('submit-btn').addEventListener('click', async () => {
     formData.append('division', division);
     formData.append('hitl_stages', JSON.stringify(hitlStages));
 
+    let apiEndpoint = '/api/v1/review/submit';
+
     if (inputType === 'file') {
         // 파일 업로드
         const fileInput = document.getElementById('file-input');
@@ -115,7 +180,7 @@ document.getElementById('submit-btn').addEventListener('click', async () => {
         }
 
         formData.append('file', file);
-    } else {
+    } else if (inputType === 'text') {
         // 텍스트 직접 입력
         const textInput = document.getElementById('text-input').value.trim();
 
@@ -125,21 +190,53 @@ document.getElementById('submit-btn').addEventListener('click', async () => {
         }
 
         formData.append('text', textInput);
+    } else if (inputType === 'confluence') {
+        // Confluence 페이지
+        const pageId = document.getElementById('confluence-page-id').value.trim();
+        const includeChildren = document.getElementById('include-child-pages').checked;
+        const includeCurrent = document.getElementById('include-current-page').checked;
+        const maxDepth = document.getElementById('max-depth').value;
+
+        if (!pageId) {
+            alert('Confluence 페이지 ID를 입력해주세요');
+            return;
+        }
+
+        formData.append('page_id', pageId);
+        formData.append('include_children', includeChildren);
+        formData.append('include_current', includeCurrent);
+        formData.append('max_depth', maxDepth);
+
+        apiEndpoint = '/api/v1/confluence/submit-for-review';
     }
 
     try {
-        const response = await fetch('/api/v1/review/submit', {
+        const response = await fetch(apiEndpoint, {
             method: 'POST',
             body: formData
         });
 
         const result = await response.json();
         currentJobId = result.job_id;
+        activeFeedbackJobId = currentJobId;
 
         console.log('✅ 제출 완료:', result);
 
         // 진행 상황 섹션 표시 (입력 섹션은 유지)
         document.getElementById('progress-section').style.display = 'block';
+
+        // Confluence 페이지 목록 표시
+        if (result.pages && result.pages.length > 0) {
+            const progressMessage = document.getElementById('progress-message');
+            let pageListHtml = '<div class="confluence-page-list" style="margin-top: 15px; padding: 10px; background: #f0f8ff; border-left: 4px solid #2196F3; border-radius: 4px;">';
+            pageListHtml += `<strong>📚 분석 중인 페이지 (총 ${result.page_count}개):</strong><br>`;
+            pageListHtml += '<ul style="margin: 10px 0; padding-left: 20px;">';
+            result.pages.forEach((page, idx) => {
+                pageListHtml += `<li>${idx + 1}. ${page.title} <span style="color: #666;">(ID: ${page.id})</span></li>`;
+            });
+            pageListHtml += '</ul></div>';
+            progressMessage.innerHTML = pageListHtml;
+        }
 
         // WebSocket 연결
         connectWebSocket(currentJobId);
@@ -155,6 +252,7 @@ function connectWebSocket(jobId) {
     console.log('🔌 WebSocket 연결 중:', wsUrl);
 
     wsConnection = new WebSocket(wsUrl);
+    activeFeedbackJobId = jobId;
 
     wsConnection.onopen = () => {
         console.log('✅ WebSocket 연결됨');
@@ -164,10 +262,17 @@ function connectWebSocket(jobId) {
         const data = JSON.parse(event.data);
         console.log('📨 메시지 수신:', data);
 
+        // 페이지별 진행 상황 업데이트
+        if (data.type === 'page_progress') {
+            updatePageProgress(data);
+        }
+
         // 에이전트 상태 업데이트
         if (data.agent) {
             updateAgentStatus(data.agent, data.status);
-            updateProgressMessage(data.message);
+            if (data.message) {
+                updateProgressMessage(data.message);
+            }
         }
 
         // BP 검색 결과 표시
@@ -177,6 +282,9 @@ function connectWebSocket(jobId) {
 
         // HITL 인터럽트 처리
         if (data.status === 'interrupt') {
+            if (data.job_id) {
+                activeFeedbackJobId = data.job_id;
+            }
             showHITLSection(data.results);
         }
 
@@ -223,11 +331,98 @@ function updateAgentStatus(agent, status) {
     }
 }
 
+function resetAgentStatuses() {
+    AGENT_STATUS_IDS.forEach((elementId) => {
+        const statusElement = document.getElementById(elementId);
+        if (statusElement) {
+            statusElement.textContent = '대기중';
+            statusElement.className = 'status-badge';
+        }
+    });
+
+    const progressMessage = document.getElementById('progress-message');
+    if (progressMessage) {
+        const progressStatus = progressMessage.querySelector('.progress-status-message');
+        if (progressStatus) {
+            progressStatus.textContent = '';
+        }
+    }
+}
+
+// 페이지별 진행 상황 업데이트
+function updatePageProgress(data) {
+    console.log('📄 페이지 진행 상황:', data);
+
+    const progressMessage = document.getElementById('progress-message');
+    if (!progressMessage) return;
+
+    if (data.reset_agents) {
+        resetAgentStatuses();
+    }
+
+    if (data.job_id) {
+        activeFeedbackJobId = data.job_id;
+    }
+
+    // 페이지 목록이 있으면 해당 페이지 상태 업데이트
+    const pageList = progressMessage.querySelector('.confluence-page-list ul');
+    if (pageList) {
+        const pageItems = pageList.querySelectorAll('li');
+        pageItems.forEach((item, idx) => {
+            if (idx === data.current_page - 1) {
+                // 현재 처리 중인 페이지
+                if (data.status === 'processing') {
+                    item.style.fontWeight = 'bold';
+                    item.style.color = '#2196F3';
+                    item.innerHTML = item.innerHTML.replace('</li>', ' ⏳ 분석 중...</li>').replace(' ⏳ 분석 중...', '') + ' ⏳ 분석 중...';
+                } else if (data.status === 'completed') {
+                    item.style.fontWeight = 'normal';
+                    item.style.color = '#4CAF50';
+                    item.innerHTML = item.innerHTML.replace(' ⏳ 분석 중...', '').replace(' ✅ 완료', '') + ' ✅ 완료';
+                }
+            }
+        });
+    }
+
+    // 진행 메시지 업데이트
+    let statusMsg = progressMessage.querySelector('.page-progress-status');
+    if (!statusMsg) {
+        statusMsg = document.createElement('div');
+        statusMsg.className = 'page-progress-status';
+        statusMsg.style.marginTop = '15px';
+        statusMsg.style.padding = '10px';
+        statusMsg.style.background = '#fff3cd';
+        statusMsg.style.borderLeft = '4px solid #ffc107';
+        statusMsg.style.borderRadius = '4px';
+        progressMessage.appendChild(statusMsg);
+    }
+    statusMsg.textContent = data.message;
+}
+
 // 진행 메시지 업데이트
 function updateProgressMessage(message) {
     const messageDiv = document.getElementById('progress-message');
     if (messageDiv) {
-        messageDiv.textContent = message || '';
+        // 기존 페이지 목록이 있으면 유지하고 메시지만 추가
+        const existingPageList = messageDiv.querySelector('.confluence-page-list');
+        console.log('🔍 updateProgressMessage - existingPageList:', existingPageList);
+        console.log('🔍 updateProgressMessage - message:', message);
+
+        if (existingPageList) {
+            console.log('✅ 페이지 목록 유지');
+            // 페이지 목록은 유지하고 진행 메시지만 업데이트
+            let statusMsg = messageDiv.querySelector('.progress-status-message');
+            if (!statusMsg) {
+                statusMsg = document.createElement('div');
+                statusMsg.className = 'progress-status-message';
+                statusMsg.style.marginTop = '10px';
+                messageDiv.appendChild(statusMsg);
+            }
+            statusMsg.textContent = message || '';
+        } else {
+            console.log('⚠️ 페이지 목록 없음, 전체 덮어쓰기');
+            messageDiv.textContent = message || '';
+        }
     }
 }
 
@@ -343,9 +538,10 @@ function showHITLSection(results) {
 // 피드백 제출
 document.getElementById('submit-feedback-btn').addEventListener('click', async () => {
     const feedback = document.getElementById('feedback-input').value;
+    const targetJobId = activeFeedbackJobId || currentJobId;
 
     try {
-        await fetch(`/api/v1/review/feedback/${currentJobId}`, {
+        await fetch(`/api/v1/review/feedback/${targetJobId}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ feedback })
@@ -363,11 +559,13 @@ document.getElementById('submit-feedback-btn').addEventListener('click', async (
 
 // 피드백 건너뛰기
 document.getElementById('skip-feedback-btn').addEventListener('click', async () => {
+    const targetJobId = activeFeedbackJobId || currentJobId;
+
     try {
-        await fetch(`/api/v1/review/feedback/${currentJobId}`, {
+        await fetch(`/api/v1/review/feedback/${targetJobId}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ feedback: '' })
+            body: JSON.stringify({ feedback: '', skip: true })
         });
 
         console.log('⏭️ 피드백 건너뛰기');

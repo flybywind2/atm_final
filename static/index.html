@@ -89,6 +89,10 @@
                             <input type="radio" name="input-type" value="text">
                             직접 작성
                         </label>
+                        <label>
+                            <input type="radio" name="input-type" value="confluence">
+                            Confluence 페이지
+                        </label>
                     </div>
 
                     <!-- 파일 업로드 -->
@@ -99,6 +103,41 @@
                     <!-- 텍스트 직접 입력 -->
                     <div id="text-input-container" class="form-group" style="display: none;">
                         <textarea id="text-input" rows="15" placeholder="제안서 내용을 입력하세요..." class="input-field"></textarea>
+                    </div>
+
+                    <!-- Confluence 페이지 입력 -->
+                    <div id="confluence-input-container" class="form-group" style="display: none;">
+                        <label>Confluence 페이지 ID:</label>
+                        <input type="text" id="confluence-page-id" placeholder="예: 123456789" class="input-field">
+
+                        <div style="margin-top: 15px;">
+                            <label style="display: block; margin-bottom: 8px;">
+                                <input type="checkbox" id="include-current-page" checked>
+                                현재 페이지 포함
+                            </label>
+                            <label style="display: block; margin-bottom: 8px;">
+                                <input type="checkbox" id="include-child-pages" checked>
+                                하위 페이지 포함
+                            </label>
+                            <label style="display: block; margin-bottom: 8px;">
+                                하위 페이지 탐색 깊이:
+                                <select id="max-depth" class="input-field" style="width: auto; display: inline-block; margin-left: 10px;">
+                                    <option value="1">1단계</option>
+                                    <option value="2" selected>2단계</option>
+                                    <option value="3">3단계</option>
+                                    <option value="4">4단계</option>
+                                    <option value="5">5단계</option>
+                                </select>
+                            </label>
+                        </div>
+
+                        <button id="preview-confluence-btn" class="btn-secondary" style="margin-top: 10px;">
+                            📄 페이지 미리보기
+                        </button>
+                        <div id="confluence-preview" style="margin-top: 10px; padding: 10px; background: #f5f5f5; border-radius: 5px; display: none;">
+                            <strong>가져올 페이지:</strong>
+                            <div id="confluence-preview-content" style="margin-top: 10px; max-height: 200px; overflow-y: auto;"></div>
+                        </div>
                     </div>
 
                     <button id="submit-btn" class="btn-primary">🚀 검토 시작</button>
