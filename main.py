@@ -1,5 +1,5 @@
 # main.py - FastAPI 통합 서버 구현
-from fastapi import FastAPI, UploadFile, File, WebSocket, Form, WebSocketDisconnect, BackgroundTasks
+from fastapi import FastAPI, UploadFile, File, WebSocket, Form, WebSocketDisconnect, BackgroundTasks, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -10,10 +10,24 @@ import ollama
 import os
 import uuid
 import json
+import re
 import requests
 from dotenv import load_dotenv
 
-from database.db import init_database, create_job, get_job, update_job_status, update_job_feedback, reset_feedback_state
+from database.db import (
+    init_database,
+    create_job,
+    get_job,
+    list_jobs,
+    update_job_status,
+    update_job_record,
+    update_job_feedback,
+    reset_feedback_state,
+    delete_job,
+    count_jobs,
+)
+from pydantic import BaseModel, Field
+from typing import Optional, List
 from config.settings import HOST, PORT
 from confluence_api import get_page_content, get_child_pages, get_pages_recursively, combine_pages_content
 
@@ -38,6 +52,132 @@ if static_path.exists():
 
 # WebSocket 연결 관리
 active_connections: dict[str, WebSocket] = {}
+
+
+class JobCreateRequest(BaseModel):
+    title: Optional[str] = None
+    proposal_content: str = Field(..., min_length=1)
+    domain: str = Field(..., min_length=1)
+    division: str = Field(..., min_length=1)
+    status: str = "pending"
+    human_decision: str = "pending"
+    llm_decision: Optional[str] = None
+    hitl_stages: Optional[List[int]] = None
+    metadata: Optional[dict] = None
+
+
+class JobUpdateRequest(BaseModel):
+    title: Optional[str] = None
+    proposal_content: Optional[str] = None
+    domain: Optional[str] = None
+    division: Optional[str] = None
+    status: Optional[str] = None
+    human_decision: Optional[str] = None
+    llm_decision: Optional[str] = None
+    hitl_stages: Optional[List[int]] = None
+    metadata: Optional[dict] = None
+
+def _extract_json_dict(text: str) -> Optional[dict]:
+    if not text:
+        return None
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            return parsed
+    except json.JSONDecodeError:
+        pass
+
+    match = re.search(r'\{.*\}', text, re.DOTALL)
+    if match:
+        try:
+            parsed = json.loads(match.group())
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            return None
+    return None
+
+
+def _truncate_for_prompt(text: str, limit: int = 800) -> str:
+    if not text:
+        return ''
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit] + '...'
+
+
+def _generate_title_sync(content: str, fallback: str) -> str:
+    prompt_body = _truncate_for_prompt(content, 600)
+    prompt = f"""
+당신은 제안서 제목을 만드는 전문가입니다. 아래 제안서 내용을 보고 핵심을 표현하는 25자 이하의 한국어 제목을 작성하세요.
+제목은 특수문자 없이 간결하게 작성하고, JSON 형식으로만 응답하세요.
+
+제안서:
+{prompt_body}
+
+응답 형식:
+{{"title": "여기에 제목"}}
+"""
+    response = call_llm(prompt)
+    data = _extract_json_dict(response)
+    if data and isinstance(data.get('title'), str):
+        title = data['title'].strip()
+        if title:
+            return title[:50]
+    snippet_lines = (content or '').strip().splitlines()
+    for line in snippet_lines:
+        line = line.strip()
+        if line:
+            return line[:50]
+    return fallback
+
+
+async def generate_job_title(content: str, fallback: str) -> str:
+    return await asyncio.to_thread(_generate_title_sync, content, fallback)
+
+
+def _classify_decision_sync(final_report: str, final_recommendation: str) -> dict:
+    prompt = f"""
+당신은 AI 프로젝트 심사위원입니다. 최종 보고서와 최종 의견을 읽고 과제를 '승인' 또는 '보류' 중 하나로 판단하세요.
+결정 기준: 실행 가능성, 기대 효과, 리스크 수준, ROI 등을 종합적으로 고려합니다.
+출력은 JSON 형식으로만 답변하며, 가능한 값은 "승인" 또는 "보류"입니다.
+
+최종 보고서:
+{_truncate_for_prompt(final_report, 1200)}
+
+최종 의견:
+{_truncate_for_prompt(final_recommendation, 800)}
+
+응답 형식 예시:
+{{"decision": "승인", "reason": "핵심 근거"}}
+"""
+    response = call_llm(prompt)
+    data = _extract_json_dict(response) or {}
+    decision = data.get('decision')
+    if decision not in ('승인', '보류'):
+        decision = '보류'
+    reason = data.get('reason') or 'LLM 판단을 기준으로 자동 분류되었습니다.'
+    return {'decision': decision, 'reason': reason}
+
+
+async def classify_final_decision(final_report: str, final_recommendation: str) -> dict:
+    return await asyncio.to_thread(_classify_decision_sync, final_report, final_recommendation)
+
+
+def persist_job_metadata(job_id: int, new_status: str, agent_updates: dict | None = None, extra_updates: dict | None = None, **status_kwargs):
+    job_snapshot = get_job(job_id) or {}
+    metadata = job_snapshot.get("metadata", {}).copy()
+
+    if agent_updates:
+        agent_results = metadata.setdefault("agent_results", {})
+        agent_results.update(agent_updates)
+
+    if extra_updates:
+        metadata.update(extra_updates)
+
+    update_job_status(job_id, new_status, metadata=metadata, **status_kwargs)
+
 
 @app.on_event("startup")
 async def startup_event():
@@ -96,8 +236,17 @@ async def submit_proposal(
     except:
         hitl_stages_list = []  # 기본값: HITL 비활성화
 
+    # 제목 자동 생성 (LLM)
+    generated_title = await generate_job_title(proposal_content, fallback=f"{domain} 제안서")
+
     # DB에 저장하고 job_id 생성
-    job_id = create_job(proposal_content, domain, division, hitl_stages=hitl_stages_list)
+    job_id = create_job(
+        proposal_content,
+        domain,
+        division,
+        title=generated_title,
+        hitl_stages=hitl_stages_list,
+    )
 
     # 백그라운드에서 검토 프로세스 시작
     print(f"Starting background task for job {job_id}")
@@ -441,7 +590,9 @@ async def process_confluence_pages_sequentially(job_ids: list, page_list: list):
                 "page_title": page_info['title'],
                 "page_id": page_info['id'],
                 "job_id": job_id,
-                "report": job_data['report']
+                "report": job_data['report'],
+                "decision": job_data.get('llm_decision'),
+                "decision_reason": (job_data.get('metadata') or {}).get('final_decision', {}).get('reason')
             })
 
         # UI에 페이지 완료 알림
@@ -473,12 +624,28 @@ async def process_confluence_pages_sequentially(job_ids: list, page_list: list):
         for idx, report_data in enumerate(all_reports, 1):
             combined_report += f"## {idx}. {report_data['page_title']}\n\n"
             combined_report += report_data['report']
+            decision_line = report_data.get('decision')
+            reason = report_data.get('decision_reason')
+            if decision_line:
+                combined_report += f"\n\n**결정:** {decision_line}"
+                if reason:
+                    combined_report += f"<br>이유: {reason}"
             combined_report += "\n\n---\n\n"
+
+        decisions_summary = [
+            {
+                "page_title": item.get("page_title"),
+                "decision": item.get("decision"),
+                "reason": item.get("decision_reason"),
+            }
+            for item in all_reports
+        ]
 
         await active_connections[str(job_ids[0])].send_json({
             "status": "completed",
             "report": combined_report,
-            "page_count": len(all_reports)
+            "page_count": len(all_reports),
+            "decisions": decisions_summary,
         })
 
 async def process_review(job_id: int, ws_job_key: str | None = None, send_final_report: bool = True):
@@ -533,7 +700,13 @@ async def process_review(job_id: int, ws_job_key: str | None = None, send_final_
                 "message": f"BP 사례 {len(bp_cases)}건 검색 완료",
                 "bp_cases": bp_cases  # BP 검색 결과 추가
             })
-        update_job_status(job_id, "bp_scouter_done")
+
+        persist_job_metadata(
+            job_id,
+            "bp_scouter_done",
+            agent_updates={"bp_scouter": bp_cases},
+            extra_updates={"bp_cases": bp_cases},
+        )
 
         # Agent 2: Objective Reviewer
         if ws:
@@ -557,7 +730,12 @@ async def process_review(job_id: int, ws_job_key: str | None = None, send_final_
 
         if ws:
             await ws.send_json({"status": "completed", "agent": "Objective_Reviewer", "message": "목표 검토 완료"})
-        update_job_status(job_id, "objective_done")
+
+        persist_job_metadata(
+            job_id,
+            "objective_done",
+            agent_updates={"objective_review": objective_review},
+        )
 
         # HITL 인터럽트: Agent 2 이후 (설정에 따라)
         if 2 in hitl_stages:
@@ -713,7 +891,12 @@ async def process_review(job_id: int, ws_job_key: str | None = None, send_final_
 
         if ws:
             await ws.send_json({"status": "completed", "agent": "Data_Analyzer", "message": "데이터 분석 완료"})
-        update_job_status(job_id, "data_analyzer_done")
+
+        persist_job_metadata(
+            job_id,
+            "data_analyzer_done",
+            agent_updates={"data_analysis": data_analysis},
+        )
 
         # HITL 인터럽트: Agent 3 이후 (설정에 따라)
         if 3 in hitl_stages:
@@ -862,7 +1045,12 @@ async def process_review(job_id: int, ws_job_key: str | None = None, send_final_
 
         if ws:
             await ws.send_json({"status": "completed", "agent": "Risk_Analyzer", "message": "리스크 분석 완료"})
-        update_job_status(job_id, "risk_done")
+
+        persist_job_metadata(
+            job_id,
+            "risk_done",
+            agent_updates={"risk_analysis": risk_analysis},
+        )
 
         # HITL 인터럽트: Agent 4 이후 (설정에 따라)
         if 4 in hitl_stages:
@@ -1006,7 +1194,12 @@ async def process_review(job_id: int, ws_job_key: str | None = None, send_final_
 
         if ws:
             await ws.send_json({"status": "completed", "agent": "ROI_Estimator", "message": "ROI 추정 완료"})
-        update_job_status(job_id, "roi_done")
+
+        persist_job_metadata(
+            job_id,
+            "roi_done",
+            agent_updates={"roi_estimation": roi_estimation},
+        )
 
         # HITL 인터럽트: Agent 5 이후 (설정에 따라)
         if 5 in hitl_stages:
@@ -1366,20 +1559,40 @@ ROI 추정:
         </div>
         """
 
-        if send_final_report:
-            target_ws = ws or active_connections.get(ws_key)
-            if target_ws:
-                await target_ws.send_json({
-                    "status": "completed",
-                    "agent": "Final_Generator",
-                    "message": "검토 완료",
-                    "report": final_report
-                })
+        decision_result = await classify_final_decision(final_report, final_recommendation)
+        decision_value = decision_result.get("decision", "보류")
+        decision_reason = decision_result.get("reason", "LLM 판단을 기준으로 자동 분류되었습니다.")
 
         latest_job = get_job(job_id) or {}
         metadata = latest_job.get("metadata", {}).copy()
         metadata["report"] = final_report
-        update_job_status(job_id, "completed", metadata=metadata)
+        agent_results = metadata.setdefault("agent_results", {})
+        agent_results["final_recommendation"] = final_recommendation
+        metadata["final_decision"] = {
+            "decision": decision_value,
+            "reason": decision_reason,
+        }
+
+        update_job_status(
+            job_id,
+            "completed",
+            metadata=metadata,
+            llm_decision=decision_value,
+        )
+
+        if send_final_report:
+            target_ws = ws or active_connections.get(ws_key)
+            if target_ws:
+                human_decision_value = latest_job.get("decision") or latest_job.get("human_decision")
+                await target_ws.send_json({
+                    "status": "completed",
+                    "agent": "Final_Generator",
+                    "message": "검토 완료",
+                    "report": final_report,
+                    "decision": decision_value,
+                    "decision_reason": decision_reason,
+                    "human_decision": human_decision_value,
+                })
 
     except Exception as e:
         print(f"!!! ERROR in review process: {e}")
@@ -1561,13 +1774,22 @@ async def submit_confluence_for_review(
 
         # 각 페이지별로 job 생성 및 순차 처리
         job_ids = []
-        page_list = [{"id": p.get("id"), "title": p.get("title")} for p in pages]
+        page_list = [{"id": p.get("id"), "title": p.get("title") or ""} for p in pages]
 
         for idx, page in enumerate(pages):
-            page_content = f"{'='*80}\n페이지: {page.get('title')}\nID: {page.get('id')}\n{'='*80}\n{page.get('content')}"
-            job_id = create_job(page_content, domain, division, hitl_stages=hitl_stages_list)
+            raw_title = page.get('title') or ''
+            page_content = f"{'='*80}\n페이지: {raw_title}\nID: {page.get('id')}\n{'='*80}\n{page.get('content')}"
+            job_title = raw_title.strip() or await generate_job_title(page_content, fallback=f"Confluence 페이지 {idx+1}")
+            job_id = create_job(
+                page_content,
+                domain,
+                division,
+                title=job_title,
+                hitl_stages=hitl_stages_list,
+            )
+            page_list[idx]["title"] = job_title
             job_ids.append(job_id)
-            print(f"Created job {job_id} for page {idx+1}/{len(pages)}: {page.get('title')}")
+            print(f"Created job {job_id} for page {idx+1}/{len(pages)}: {job_title}")
 
         # 첫 번째 페이지부터 순차적으로 처리 시작
         print(f"Starting sequential processing for {len(job_ids)} pages")
@@ -1607,6 +1829,163 @@ async def get_confluence_child_pages(page_id: str):
             status_code=500,
             content={"error": f"하위 페이지 조회 실패: {str(e)}"}
         )
+
+
+# ==================== Dashboard & CRUD API ====================
+
+
+@app.get("/dashboard")
+async def dashboard_page():
+    """대시보드 HTML 제공"""
+    return FileResponse("static/dashboard.html")
+
+
+def _sanitize_decision(decision: str | None) -> str | None:
+    if not decision:
+        return decision
+    normalized = decision.strip()
+    return normalized
+
+
+def _coerce_hitl_stages(values: Optional[List[int] | List[str]]) -> Optional[List[int]]:
+    if values is None:
+        return None
+    coerced = []
+    for item in values:
+        try:
+            coerced.append(int(item))
+        except (TypeError, ValueError):
+            continue
+    return coerced
+
+
+@app.get("/api/v1/dashboard/jobs")
+async def dashboard_list(
+    status: Optional[str] = None,
+    decision: Optional[str] = None,
+    llm_decision: Optional[str] = None,
+    search: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+    order: str = "desc",
+):
+    limit = max(1, min(limit, 200))
+    offset = max(0, offset)
+
+    jobs = list_jobs(
+        limit=limit,
+        offset=offset,
+        status=status,
+        decision=decision,
+        llm_decision=llm_decision,
+        search=search,
+        order=order,
+    )
+
+    total = count_jobs(status=status, decision=decision, llm_decision=llm_decision, search=search)
+
+    formatted_jobs = []
+    for job in jobs:
+        job_copy = job.copy()
+        proposal_text = (job_copy.get("proposal_content") or "")
+        job_copy["proposal_preview"] = proposal_text[:200]
+        formatted_jobs.append(job_copy)
+
+    return {
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "jobs": formatted_jobs,
+    }
+
+
+@app.get("/api/v1/dashboard/jobs/{job_id}")
+async def dashboard_get_job_detail(job_id: int):
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="존재하지 않는 작업입니다.")
+    return job
+
+
+@app.post("/api/v1/dashboard/jobs")
+async def dashboard_create_job(payload: JobCreateRequest):
+    metadata_payload = payload.metadata.copy() if payload.metadata else {}
+    hitl_stages = payload.hitl_stages
+    if hitl_stages is None and "hitl_stages" in metadata_payload:
+        hitl_stages = _coerce_hitl_stages(metadata_payload.pop("hitl_stages"))
+    else:
+        hitl_stages = _coerce_hitl_stages(hitl_stages)
+
+    human_decision_value = _sanitize_decision(payload.human_decision) or "pending"
+    llm_decision_value = _sanitize_decision(payload.llm_decision) if payload.llm_decision else "pending"
+    title_value = (payload.title or "").strip()
+    if not title_value:
+        title_value = await generate_job_title(payload.proposal_content, fallback=f"{payload.domain} 제안서")
+
+    job_id = create_job(
+        payload.proposal_content,
+        payload.domain,
+        payload.division,
+        title=title_value,
+        status=payload.status,
+        human_decision=human_decision_value,
+        llm_decision=llm_decision_value,
+        metadata=metadata_payload,
+        hitl_stages=hitl_stages,
+    )
+
+    created_job = get_job(job_id)
+    return created_job
+
+
+@app.put("/api/v1/dashboard/jobs/{job_id}")
+async def dashboard_update_job(job_id: int, payload: JobUpdateRequest):
+    existing = get_job(job_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="존재하지 않는 작업입니다.")
+
+    metadata_payload = None
+    if payload.metadata is not None:
+        base_metadata = existing.get("metadata", {}).copy()
+        if payload.metadata == {}:
+            base_metadata = {}
+        else:
+            base_metadata.update(payload.metadata)
+        metadata_payload = base_metadata
+
+    if payload.hitl_stages is not None:
+        stages = _coerce_hitl_stages(payload.hitl_stages)
+        if metadata_payload is None:
+            metadata_payload = existing.get("metadata", {}).copy()
+        metadata_payload["hitl_stages"] = stages or []
+
+    success = update_job_record(
+        job_id,
+        title=payload.title,
+        proposal_content=payload.proposal_content,
+        domain=payload.domain,
+        division=payload.division,
+        status=payload.status,
+        human_decision=_sanitize_decision(payload.human_decision) if payload.human_decision is not None else None,
+        llm_decision=_sanitize_decision(payload.llm_decision) if payload.llm_decision is not None else None,
+        metadata=metadata_payload,
+    )
+
+    if not success:
+        raise HTTPException(status_code=400, detail="업데이트할 필드가 없습니다.")
+
+    return get_job(job_id)
+
+
+@app.delete("/api/v1/dashboard/jobs/{job_id}")
+async def dashboard_delete_job(job_id: int):
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="존재하지 않는 작업입니다.")
+
+    delete_job(job_id)
+    return {"status": "deleted", "job_id": job_id}
+
 
 if __name__ == "__main__":
     print(f"Server starting at http://{HOST}:{PORT}")

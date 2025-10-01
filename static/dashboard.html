@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>리뷰 작업 대시보드</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="/static/css/dashboard.css">
+</head>
+<body>
+    <div id="dashboard-app">
+        <header class="dashboard-header">
+            <h1>리뷰 작업 대시보드</h1>
+            <p>검토 이력 조회·수정 및 승인/보류 결과 관리를 위한 관리자 화면입니다.</p>
+            <nav class="dashboard-nav">
+                <a href="/" class="nav-link">← 메인 화면으로 돌아가기</a>
+            </nav>
+        </header>
+
+        <main class="dashboard-main">
+            <section class="card filters-card">
+                <h2>검색 및 필터</h2>
+                <form id="filter-form" class="filters-form">
+                    <div class="form-row">
+                        <label>
+                            상태
+                            <select id="filter-status" class="input-field">
+                                <option value="">전체</option>
+                                <option value="pending">pending</option>
+                                <option value="bp_scouter_done">bp_scouter_done</option>
+                                <option value="objective_done">objective_done</option>
+                                <option value="data_analyzer_done">data_analyzer_done</option>
+                                <option value="risk_done">risk_done</option>
+                                <option value="roi_done">roi_done</option>
+                                <option value="final_done">final_done</option>
+                                <option value="completed">completed</option>
+                                <option value="waiting_feedback">waiting_feedback</option>
+                                <option value="feedback_received">feedback_received</option>
+                                <option value="error">error</option>
+                            </select>
+                        </label>
+                        <label>
+                            결정(승인/보류)
+                            <select id="filter-decision" class="input-field">
+                                <option value="">전체</option>
+                                <option value="pending">대기</option>
+                                <option value="승인">승인</option>
+                                <option value="보류">보류</option>
+                            </select>
+                        </label>
+                        <label>
+                            자동 결정
+                            <select id="filter-llm-decision" class="input-field">
+                                <option value="">전체</option>
+                                <option value="pending">대기</option>
+                                <option value="승인">승인</option>
+                                <option value="보류">보류</option>
+                            </select>
+                        </label>
+                        <label class="search-field">
+                            검색어
+                            <input type="text" id="filter-search" class="input-field" placeholder="제목 또는 내용 검색" />
+                        </label>
+                        <label>
+                            표시 수
+                            <select id="filter-limit" class="input-field">
+                                <option value="25">25</option>
+                                <option value="50" selected>50</option>
+                                <option value="100">100</option>
+                            </select>
+                        </label>
+                    </div>
+                    <div class="form-actions">
+                        <button type="submit" class="btn-primary">필터 적용</button>
+                        <button type="button" id="reset-filters" class="btn-secondary">초기화</button>
+                    </div>
+                </form>
+            </section>
+
+            <section class="card list-card">
+                <div class="list-card-header">
+                    <h2>작업 목록</h2>
+                    <span id="jobs-count" class="info-badge">총 0건</span>
+                </div>
+                <div class="table-wrapper">
+                    <table class="jobs-table">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>제목</th>
+                                <th>도메인</th>
+                                <th>사업부</th>
+                                <th>상태</th>
+                                <th>자동 결정</th>
+                                <th>최종 결정</th>
+                                <th>업데이트</th>
+                                <th>작업</th>
+                            </tr>
+                        </thead>
+                        <tbody id="jobs-table-body">
+                            <tr>
+                                <td colspan="8" class="empty-row">데이터를 불러오는 중입니다...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <section class="layout-grid">
+                <article class="card create-card">
+                    <h2>새 기록 추가</h2>
+                    <form id="create-job-form" class="dashboard-form">
+                        <label>
+                            제목
+                            <input type="text" id="create-title" class="input-field" placeholder="예: 2024-04-18 제안서" />
+                        </label>
+                        <label>
+                            도메인
+                            <input type="text" id="create-domain" class="input-field" placeholder="예: 제조/생산" required />
+                        </label>
+                        <label>
+                            사업부
+                            <input type="text" id="create-division" class="input-field" placeholder="예: 메모리" required />
+                        </label>
+                        <label>
+                            상태
+                            <input type="text" id="create-status" class="input-field" value="pending" required />
+                        </label>
+                        <label>
+                            결정(승인/보류)
+                            <select id="create-decision" class="input-field">
+                                <option value="pending">대기</option>
+                                <option value="승인">승인</option>
+                                <option value="보류">보류</option>
+                            </select>
+                        </label>
+                        <label>
+                            HITL 단계 (쉼표 구분)
+                            <input type="text" id="create-hitl" class="input-field" placeholder="예: 2,3,5" />
+                        </label>
+                        <label>
+                            제안서 내용
+                            <textarea id="create-content" class="input-field" rows="6" placeholder="제안서 전문을 입력하세요" required></textarea>
+                        </label>
+                        <div class="form-actions">
+                            <button type="submit" class="btn-primary">기록 추가</button>
+                            <span id="create-feedback" class="form-feedback"></span>
+                        </div>
+                    </form>
+                </article>
+            </section>
+        </main>
+    </div>
+
+    <div id="detail-modal" class="modal hidden">
+        <div id="detail-modal-backdrop" class="modal-backdrop"></div>
+        <div class="modal-content card">
+            <button type="button" id="detail-modal-close" class="modal-close">×</button>
+            <h2>선택된 작업 상세</h2>
+            <div id="detail-empty" class="empty-state">
+                목록에서 작업을 선택하면 상세 정보가 이 영역에 표시됩니다.
+            </div>
+            <form id="detail-form" class="dashboard-form" style="display: none;">
+                <input type="hidden" id="detail-id" />
+                <div class="modal-grid">
+                    <label>
+                        제목
+                        <input type="text" id="detail-title" class="input-field" />
+                    </label>
+                    <label>
+                        도메인
+                        <input type="text" id="detail-domain" class="input-field" />
+                    </label>
+                    <label>
+                        사업부
+                        <input type="text" id="detail-division" class="input-field" />
+                    </label>
+                    <label>
+                        상태
+                        <input type="text" id="detail-status" class="input-field" />
+                    </label>
+                    <label>
+                        자동 결정 (LLM)
+                        <input type="text" id="detail-llm-decision" class="input-field" readonly />
+                    </label>
+                    <label>
+                        최종 결정 (사람)
+                        <select id="detail-human-decision" class="input-field">
+                            <option value="pending">대기</option>
+                            <option value="승인">승인</option>
+                            <option value="보류">보류</option>
+                        </select>
+                    </label>
+                    <label>
+                        LLM 결정 근거
+                        <textarea id="detail-llm-reason" class="input-field" rows="3" readonly></textarea>
+                    </label>
+                    <label>
+                        HITL 단계 (쉼표 구분)
+                        <input type="text" id="detail-hitl" class="input-field" />
+                    </label>
+                </div>
+                <label>
+                    제안서 내용
+                    <textarea id="detail-content" class="input-field" rows="8"></textarea>
+                </label>
+                <section id="agent-results" class="agent-results"></section>
+                <div class="form-actions">
+                    <div class="decision-buttons">
+                        <button type="button" id="mark-approved" class="btn-success">승인으로 표시</button>
+                        <button type="button" id="mark-onhold" class="btn-warning">보류로 표시</button>
+                    </div>
+                    <div class="detail-buttons">
+                        <button type="submit" class="btn-primary">저장</button>
+                        <button type="button" id="delete-job" class="btn-danger">삭제</button>
+                    </div>
+                </div>
+                <pre id="detail-metadata" class="metadata-view"></pre>
+                <span id="detail-feedback" class="form-feedback"></span>
+            </form>
+        </div>
+    </div>
+
+    <script type="module" src="/static/js/dashboard.js"></script>
+</body>
+</html>

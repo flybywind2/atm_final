@@ -27,6 +27,20 @@ def init_database():
         )
     """)
 
+    # 필요한 컬럼 추가 (스키마 마이그레이션)
+    cursor.execute("PRAGMA table_info(review_jobs)")
+    existing_columns = {row[1] for row in cursor.fetchall()}
+
+    if "decision" not in existing_columns:
+        cursor.execute("ALTER TABLE review_jobs ADD COLUMN decision TEXT DEFAULT 'pending'")
+
+    if "llm_decision" not in existing_columns:
+        cursor.execute("ALTER TABLE review_jobs ADD COLUMN llm_decision TEXT DEFAULT 'pending'")
+        cursor.execute("UPDATE review_jobs SET llm_decision = COALESCE(decision, 'pending')")
+
+    if "title" not in existing_columns:
+        cursor.execute("ALTER TABLE review_jobs ADD COLUMN title TEXT")
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS hitl_feedback (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -60,72 +74,312 @@ def init_database():
     conn.close()
     print("Database initialized successfully")
 
-def create_job(proposal_content: str, domain: str, division: str, hitl_stages: list = None):
+def create_job(
+    proposal_content: str,
+    domain: str,
+    division: str,
+    *,
+    title: str | None = None,
+    hitl_stages: list | None = None,
+    status: str = "pending",
+    human_decision: str = "pending",
+    llm_decision: str = "pending",
+    metadata: dict | None = None,
+):
     """새 검토 작업 생성"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
-    # metadata에 hitl_stages 저장
-    metadata = {"hitl_stages": hitl_stages if hitl_stages is not None else []}
+    metadata_payload = metadata.copy() if metadata else {}
+    if hitl_stages is not None:
+        metadata_payload["hitl_stages"] = hitl_stages
 
-    cursor.execute("""
-        INSERT INTO review_jobs (status, proposal_content, domain, division, metadata)
-        VALUES (?, ?, ?, ?, ?)
-    """, ("pending", proposal_content, domain, division, json.dumps(metadata)))
+    cursor.execute(
+        """
+        INSERT INTO review_jobs (status, decision, llm_decision, title, proposal_content, domain, division, metadata)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            status,
+            human_decision,
+            llm_decision,
+            title,
+            proposal_content,
+            domain,
+            division,
+            json.dumps(metadata_payload),
+        ),
+    )
 
     job_id = cursor.lastrowid
     conn.commit()
     conn.close()
     return job_id
 
+def _row_to_job_dict(row):
+    (
+        job_id,
+        status,
+        decision,
+        llm_decision,
+        title,
+        proposal_content,
+        domain,
+        division,
+        metadata_json,
+        created_at,
+        updated_at,
+    ) = row
+
+    metadata = json.loads(metadata_json) if metadata_json else {}
+
+    return {
+        "id": job_id,
+        "status": status,
+        "decision": decision or "pending",
+        "human_decision": decision or "pending",
+        "llm_decision": llm_decision or "pending",
+        "title": title or "",
+        "content": proposal_content,
+        "proposal_content": proposal_content,
+        "domain": domain,
+        "division": division,
+        "metadata": metadata,
+        "hitl_stages": metadata.get("hitl_stages", []),
+        "feedback": metadata.get("feedback", ""),
+        "feedback_skip": metadata.get("feedback_skip", False),
+        "feedback_history": metadata.get("feedback_history", []),
+        "report": metadata.get("report"),
+        "created_at": created_at,
+        "updated_at": updated_at,
+    }
+
+
 def get_job(job_id: int):
-    """작업 조회"""
+    """작업 단건 조회"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
-    cursor.execute("""
-        SELECT id, status, proposal_content, domain, division, metadata
+    cursor.execute(
+        """
+        SELECT id, status, decision, llm_decision, title, proposal_content, domain, division, metadata, created_at, updated_at
         FROM review_jobs WHERE id = ?
-    """, (job_id,))
+        """,
+        (job_id,),
+    )
 
     row = cursor.fetchone()
     conn.close()
 
-    if row:
-        metadata = json.loads(row[5]) if row[5] else {}
-        return {
-            "id": row[0],
-            "status": row[1],
-            "content": row[2],  # Changed key to "content" for consistency
-            "proposal_content": row[2],
-            "domain": row[3],
-            "division": row[4],
-            "metadata": metadata,
-            "hitl_stages": metadata.get("hitl_stages", []),
-            "feedback": metadata.get("feedback", ""),  # 피드백 추가
-            "feedback_skip": metadata.get("feedback_skip", False),
-            "feedback_history": metadata.get("feedback_history", []),
-            "report": metadata.get("report")
-        }
-    return None
+    return _row_to_job_dict(row) if row else None
 
-def update_job_status(job_id: int, status: str, metadata: dict = None):
-    """작업 상태 업데이트"""
+
+def list_jobs(
+    *,
+    limit: int = 100,
+    offset: int = 0,
+    status: str | None = None,
+    decision: str | None = None,
+    llm_decision: str | None = None,
+    search: str | None = None,
+    order: str = "desc",
+):
+    """작업 목록 조회"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
-    if metadata:
-        cursor.execute("""
-            UPDATE review_jobs
-            SET status = ?, metadata = ?, updated_at = CURRENT_TIMESTAMP
-            WHERE id = ?
-        """, (status, json.dumps(metadata), job_id))
-    else:
-        cursor.execute("""
-            UPDATE review_jobs
-            SET status = ?, updated_at = CURRENT_TIMESTAMP
-            WHERE id = ?
-        """, (status, job_id))
+    query = [
+        "SELECT id, status, decision, llm_decision, title, proposal_content, domain, division, metadata, created_at, updated_at",
+        "FROM review_jobs",
+        "WHERE 1 = 1",
+    ]
+    params: list = []
+
+    if status:
+        query.append("AND status = ?")
+        params.append(status)
+
+    if decision:
+        query.append("AND decision = ?")
+        params.append(decision)
+
+    if llm_decision:
+        query.append("AND llm_decision = ?")
+        params.append(llm_decision)
+
+    if search:
+        query.append("AND (proposal_content LIKE ? OR COALESCE(title, '') LIKE ?)")
+        like = f"%{search}%"
+        params.extend([like, like])
+
+    order_clause = "DESC" if order.lower() != "asc" else "ASC"
+    query.append(f"ORDER BY datetime(created_at) {order_clause}")
+    query.append("LIMIT ? OFFSET ?")
+    params.extend([limit, offset])
+
+    cursor.execute("\n".join(query), params)
+    rows = cursor.fetchall()
+    conn.close()
+
+    return [_row_to_job_dict(row) for row in rows]
+
+
+def count_jobs(
+    *,
+    status: str | None = None,
+    decision: str | None = None,
+    llm_decision: str | None = None,
+    search: str | None = None,
+):
+    """필터에 따른 총 개수"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    query = ["SELECT COUNT(*) FROM review_jobs WHERE 1 = 1"]
+    params: list = []
+
+    if status:
+        query.append("AND status = ?")
+        params.append(status)
+
+    if decision:
+        query.append("AND decision = ?")
+        params.append(decision)
+
+    if llm_decision:
+        query.append("AND llm_decision = ?")
+        params.append(llm_decision)
+
+    if search:
+        query.append("AND (proposal_content LIKE ? OR COALESCE(title, '') LIKE ?)")
+        like = f"%{search}%"
+        params.extend([like, like])
+
+    cursor.execute("\n".join(query), params)
+    total = cursor.fetchone()[0]
+    conn.close()
+    return total
+
+
+def update_job_record(
+    job_id: int,
+    *,
+    title: str | None = None,
+    proposal_content: str | None = None,
+    domain: str | None = None,
+    division: str | None = None,
+    status: str | None = None,
+    human_decision: str | None = None,
+    llm_decision: str | None = None,
+    metadata: dict | None = None,
+):
+    """필드 단위 업데이트"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    fields = []
+    params: list = []
+
+    if title is not None:
+        fields.append("title = ?")
+        params.append(title)
+
+    if proposal_content is not None:
+        fields.append("proposal_content = ?")
+        params.append(proposal_content)
+
+    if domain is not None:
+        fields.append("domain = ?")
+        params.append(domain)
+
+    if division is not None:
+        fields.append("division = ?")
+        params.append(division)
+
+    if status is not None:
+        fields.append("status = ?")
+        params.append(status)
+
+    if human_decision is not None:
+        fields.append("decision = ?")
+        params.append(human_decision)
+
+    if llm_decision is not None:
+        fields.append("llm_decision = ?")
+        params.append(llm_decision)
+
+    if metadata is not None:
+        fields.append("metadata = ?")
+        params.append(json.dumps(metadata))
+
+    if not fields:
+        conn.close()
+        return False
+
+    fields.append("updated_at = CURRENT_TIMESTAMP")
+    params.append(job_id)
+
+    cursor.execute(
+        f"""
+        UPDATE review_jobs
+        SET {', '.join(fields)}
+        WHERE id = ?
+        """,
+        params,
+    )
+
+    conn.commit()
+    conn.close()
+    return True
+
+
+def delete_job(job_id: int):
+    """작업 삭제"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM review_jobs WHERE id = ?", (job_id,))
+    conn.commit()
+    conn.close()
+
+
+def update_job_status(
+    job_id: int,
+    status: str,
+    metadata: dict = None,
+    decision: str | None = None,
+    llm_decision: str | None = None,
+    human_decision: str | None = None,
+):
+    """작업 상태 및 결정 결과 업데이트"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    fields = ["status = ?", "updated_at = CURRENT_TIMESTAMP"]
+    params = [status]
+
+    if metadata is not None:
+        fields.append("metadata = ?")
+        params.append(json.dumps(metadata))
+
+    human_value = human_decision if human_decision is not None else decision
+    if human_value is not None:
+        fields.append("decision = ?")
+        params.append(human_value)
+
+    if llm_decision is not None:
+        fields.append("llm_decision = ?")
+        params.append(llm_decision)
+
+    params.append(job_id)
+
+    cursor.execute(
+        f"""
+        UPDATE review_jobs
+        SET {', '.join(fields)}
+        WHERE id = ?
+        """,
+        params,
+    )
 
     conn.commit()
     conn.close()

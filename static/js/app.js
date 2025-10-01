@@ -288,9 +288,9 @@ function connectWebSocket(jobId) {
             showHITLSection(data.results);
         }
 
-        // 최종 완료 (report가 있을 때만)
+       // 최종 완료 (report가 있을 때만)
         if (data.status === 'completed' && data.report) {
-            showFinalResults(data.report);
+            showFinalResults(data.report, data.decision, data.decision_reason, data.decisions);
         }
     };
 
@@ -579,12 +579,35 @@ document.getElementById('skip-feedback-btn').addEventListener('click', async () 
 });
 
 // 최종 결과 표시
-function showFinalResults(report) {
+function showFinalResults(report, decision = null, decisionReason = null, decisions = null) {
     document.getElementById('progress-section').style.display = 'none';
     document.getElementById('hitl-section').style.display = 'none';
     document.getElementById('result-section').style.display = 'block';
 
-    document.getElementById('final-report').innerHTML = report;
+    let headerHtml = '';
+
+    if (Array.isArray(decisions) && decisions.length > 0) {
+        headerHtml += '<div class="decision-summary">';
+        headerHtml += '<h3>📌 페이지별 자동 판정</h3>';
+        headerHtml += '<ul>';
+        decisions.forEach((item, index) => {
+            const title = item.page_title || `페이지 ${index + 1}`;
+            const decisionText = item.decision || '대기';
+            const reason = item.reason ? ` - ${item.reason}` : '';
+            headerHtml += `<li><strong>${title}</strong>: ${decisionText}${reason}</li>`;
+        });
+        headerHtml += '</ul>';
+        headerHtml += '</div>';
+    } else if (decision) {
+        headerHtml += '<div class="decision-summary-single">';
+        headerHtml += `<h3>📌 자동 판정: ${decision}</h3>`;
+        if (decisionReason) {
+            headerHtml += `<p>${decisionReason}</p>`;
+        }
+        headerHtml += '</div>';
+    }
+
+    document.getElementById('final-report').innerHTML = `${headerHtml}${report}`;
 }
 
 // PDF 다운로드
