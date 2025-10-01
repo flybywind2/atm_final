@@ -2,6 +2,79 @@
 let currentJobId = null;
 let wsConnection = null;
 
+// Floating BP Panel - Drag functionality
+let isDragging = false;
+let currentX;
+let currentY;
+let initialX;
+let initialY;
+let xOffset = 0;
+let yOffset = 0;
+
+const floatingPanel = document.getElementById('bp-cases-floating');
+const floatingHeader = document.getElementById('bp-cases-floating-header');
+const floatingContent = document.getElementById('bp-cases-floating-content');
+const toggleBtn = document.getElementById('toggle-bp-btn');
+const closeBtn = document.getElementById('close-bp-btn');
+
+// Drag events
+floatingHeader.addEventListener('mousedown', dragStart);
+document.addEventListener('mousemove', drag);
+document.addEventListener('mouseup', dragEnd);
+
+function dragStart(e) {
+    if (e.target.classList.contains('floating-btn')) return;
+
+    initialX = e.clientX - xOffset;
+    initialY = e.clientY - yOffset;
+
+    if (e.target === floatingHeader || e.target.parentElement === floatingHeader) {
+        isDragging = true;
+    }
+}
+
+function drag(e) {
+    if (isDragging) {
+        e.preventDefault();
+        currentX = e.clientX - initialX;
+        currentY = e.clientY - initialY;
+        xOffset = currentX;
+        yOffset = currentY;
+
+        setTranslate(currentX, currentY, floatingPanel);
+    }
+}
+
+function dragEnd(e) {
+    initialX = currentX;
+    initialY = currentY;
+    isDragging = false;
+}
+
+function setTranslate(xPos, yPos, el) {
+    el.style.transform = `translate3d(${xPos}px, ${yPos}px, 0)`;
+}
+
+// Toggle collapse/expand
+let isCollapsed = false;
+toggleBtn.addEventListener('click', () => {
+    isCollapsed = !isCollapsed;
+    if (isCollapsed) {
+        floatingContent.style.display = 'none';
+        toggleBtn.textContent = '+';
+        floatingPanel.classList.add('collapsed');
+    } else {
+        floatingContent.style.display = 'block';
+        toggleBtn.textContent = '−';
+        floatingPanel.classList.remove('collapsed');
+    }
+});
+
+// Close panel
+closeBtn.addEventListener('click', () => {
+    floatingPanel.style.display = 'none';
+});
+
 // 입력 방식 전환
 document.querySelectorAll('input[name="input-type"]').forEach(radio => {
     radio.addEventListener('change', (e) => {
@@ -65,8 +138,7 @@ document.getElementById('submit-btn').addEventListener('click', async () => {
 
         console.log('✅ 제출 완료:', result);
 
-        // 진행 상황 섹션 표시
-        document.getElementById('upload-section').style.display = 'none';
+        // 진행 상황 섹션 표시 (입력 섹션은 유지)
         document.getElementById('progress-section').style.display = 'block';
 
         // WebSocket 연결
@@ -159,37 +231,31 @@ function updateProgressMessage(message) {
     }
 }
 
-// BP 검색 결과 표시
+// BP 검색 결과 표시 (Floating Panel)
 function showBPCases(bpCases) {
-    const panel = document.getElementById('bp-cases-panel');
-    const content = document.getElementById('bp-cases-content');
-
     if (!bpCases || bpCases.length === 0) {
         return;
     }
 
-    panel.style.display = 'block';
+    // Floating 패널 표시
+    floatingPanel.style.display = 'block';
 
     let html = '';
     bpCases.forEach((bpCase, index) => {
         html += `
-            <div style="background: white; padding: 12px; margin-bottom: 12px; border-radius: 6px; border-left: 4px solid #4CAF50;">
-                <h4 style="margin: 0 0 8px 0; color: #333; font-size: 0.95em;">
-                    ${index + 1}. ${bpCase.title}
-                </h4>
-                <div style="font-size: 0.85em; color: #666; line-height: 1.5;">
-                    <p style="margin: 4px 0;"><strong>기술 유형:</strong> ${bpCase.tech_type}</p>
-                    <p style="margin: 4px 0;"><strong>도메인:</strong> ${bpCase.business_domain} | <strong>사업부:</strong> ${bpCase.division}</p>
-                    <p style="margin: 4px 0;"><strong>문제 (AS-WAS):</strong> ${bpCase.problem_as_was}</p>
-                    <p style="margin: 4px 0;"><strong>솔루션 (TO-BE):</strong> ${bpCase.solution_to_be}</p>
-                    <p style="margin: 4px 0; color: #2196F3;"><strong>핵심 요약:</strong> ${bpCase.summary}</p>
-                    ${bpCase.tips ? `<p style="margin: 4px 0; color: #FF9800;"><strong>💡 팁:</strong> ${bpCase.tips}</p>` : ''}
-                </div>
+            <div class="bp-case-item">
+                <h4>${index + 1}. ${bpCase.title}</h4>
+                <div class="bp-field"><strong>기술 유형:</strong> ${bpCase.tech_type}</div>
+                <div class="bp-field"><strong>도메인:</strong> ${bpCase.business_domain} | <strong>사업부:</strong> ${bpCase.division}</div>
+                <div class="bp-field"><strong>문제 (AS-WAS):</strong> ${bpCase.problem_as_was}</div>
+                <div class="bp-field"><strong>솔루션 (TO-BE):</strong> ${bpCase.solution_to_be}</div>
+                <div class="bp-field bp-summary"><strong>💎 핵심 요약:</strong> ${bpCase.summary}</div>
+                ${bpCase.tips ? `<div class="bp-field bp-tips"><strong>💡 팁:</strong> ${bpCase.tips}</div>` : ''}
             </div>
         `;
     });
 
-    content.innerHTML = html;
+    floatingContent.innerHTML = html;
 }
 
 // HITL 섹션 표시

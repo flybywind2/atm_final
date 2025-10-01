@@ -258,3 +258,130 @@ footer {
         transform: translateY(0);
     }
 }
+
+/* Floating BP Cases Panel */
+#bp-cases-floating {
+    position: fixed;
+    top: 100px;
+    right: 20px;
+    width: 400px;
+    max-height: 70vh;
+    background: white;
+    border-radius: 10px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+    z-index: 1000;
+    display: none;
+    overflow: hidden;
+}
+
+#bp-cases-floating.collapsed {
+    height: auto;
+    max-height: none;
+}
+
+#bp-cases-floating-header {
+    background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);
+    color: white;
+    padding: 15px 20px;
+    cursor: move;
+    user-select: none;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-weight: 600;
+}
+
+#bp-cases-floating-header:active {
+    cursor: grabbing;
+}
+
+#bp-cases-floating-controls {
+    display: flex;
+    gap: 10px;
+}
+
+.floating-btn {
+    background: rgba(255, 255, 255, 0.2);
+    border: none;
+    color: white;
+    width: 24px;
+    height: 24px;
+    border-radius: 4px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    transition: background 0.2s;
+}
+
+.floating-btn:hover {
+    background: rgba(255, 255, 255, 0.3);
+}
+
+#bp-cases-floating-content {
+    padding: 20px;
+    max-height: calc(70vh - 54px);
+    overflow-y: auto;
+    overflow-x: hidden;
+}
+
+#bp-cases-floating-content::-webkit-scrollbar {
+    width: 8px;
+}
+
+#bp-cases-floating-content::-webkit-scrollbar-track {
+    background: #f1f1f1;
+    border-radius: 10px;
+}
+
+#bp-cases-floating-content::-webkit-scrollbar-thumb {
+    background: #888;
+    border-radius: 10px;
+}
+
+#bp-cases-floating-content::-webkit-scrollbar-thumb:hover {
+    background: #555;
+}
+
+.bp-case-item {
+    background: #f9f9f9;
+    padding: 15px;
+    margin-bottom: 15px;
+    border-radius: 8px;
+    border-left: 4px solid #4CAF50;
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.bp-case-item:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.bp-case-item h4 {
+    margin: 0 0 10px 0;
+    color: #333;
+    font-size: 15px;
+}
+
+.bp-case-item .bp-field {
+    font-size: 13px;
+    color: #666;
+    line-height: 1.6;
+    margin: 6px 0;
+}
+
+.bp-case-item .bp-field strong {
+    color: #333;
+    font-weight: 600;
+}
+
+.bp-case-item .bp-summary {
+    color: #2196F3;
+    font-weight: 500;
+}
+
+.bp-case-item .bp-tips {
+    color: #FF9800;
+    font-weight: 500;
+}

@@ -66,7 +66,7 @@ def create_job(proposal_content: str, domain: str, division: str, hitl_stages: l
     cursor = conn.cursor()
 
     # metadata에 hitl_stages 저장
-    metadata = {"hitl_stages": hitl_stages or [2]}
+    metadata = {"hitl_stages": hitl_stages if hitl_stages is not None else []}
 
     cursor.execute("""
         INSERT INTO review_jobs (status, proposal_content, domain, division, metadata)
@@ -92,7 +92,7 @@ def get_job(job_id: int):
     conn.close()
 
     if row:
-        metadata = json.loads(row[5])
+        metadata = json.loads(row[5]) if row[5] else {}
         return {
             "id": row[0],
             "status": row[1],
@@ -101,7 +101,8 @@ def get_job(job_id: int):
             "domain": row[3],
             "division": row[4],
             "metadata": metadata,
-            "hitl_stages": metadata.get("hitl_stages", [2])
+            "hitl_stages": metadata.get("hitl_stages", []),
+            "feedback": metadata.get("feedback", "")  # 피드백 추가
         }
     return None
 
@@ -124,6 +125,29 @@ def update_job_status(job_id: int, status: str, metadata: dict = None):
         """, (status, job_id))
 
     conn.commit()
+    conn.close()
+
+def update_job_feedback(job_id: int, feedback: str):
+    """작업에 피드백 저장 (메타데이터에 저장)"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    # 기존 metadata 가져오기
+    cursor.execute("SELECT metadata FROM review_jobs WHERE id = ?", (job_id,))
+    row = cursor.fetchone()
+
+    if row:
+        metadata = json.loads(row[0]) if row[0] else {}
+        metadata["feedback"] = feedback
+
+        cursor.execute("""
+            UPDATE review_jobs
+            SET metadata = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        """, (json.dumps(metadata), job_id))
+
+        conn.commit()
+
     conn.close()
 
 def save_feedback(job_id: int, agent_id: str, feedback_data: dict):

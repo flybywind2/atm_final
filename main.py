@@ -13,7 +13,7 @@ import json
 import requests
 from dotenv import load_dotenv
 
-from database.db import init_database, create_job, get_job, update_job_status
+from database.db import init_database, create_job, get_job, update_job_status, update_job_feedback
 from config.settings import HOST, PORT
 
 # 환경 변수 로드
@@ -93,7 +93,7 @@ async def submit_proposal(
     try:
         hitl_stages_list = json.loads(hitl_stages)
     except:
-        hitl_stages_list = [2]  # 기본값: Agent 2에서 HITL
+        hitl_stages_list = []  # 기본값: HITL 비활성화
 
     # DB에 저장하고 job_id 생성
     job_id = create_job(proposal_content, domain, division, hitl_stages=hitl_stages_list)
@@ -223,8 +223,8 @@ def retrieve_from_rag(query_text: str, num_result_doc: int = 5, retrieval_method
         print(f"RAG 검색 실패: {e}")
         return []
 
-def analyze_feedback_for_retry(feedback: str, agent_name: str) -> dict:
-    """피드백을 분석하여 재검토 필요 여부 판단
+def analyze_result_quality(agent_name: str, analysis_result: str, proposal_text: str) -> dict:
+    """에이전트의 분석 결과 품질을 평가하여 재검토 필요 여부 판단
 
     Returns:
         {
@@ -233,53 +233,80 @@ def analyze_feedback_for_retry(feedback: str, agent_name: str) -> dict:
             "additional_info_needed": list  # 필요한 추가 정보 항목들
         }
     """
-    print(f"[DEBUG] Analyzing feedback for {agent_name}...")
+    print(f"[DEBUG] Analyzing result quality for {agent_name}...")
+    print(f"[DEBUG] Analysis result length: {len(analysis_result)}")
 
-    # 피드백이 비어있으면 재검토 불필요
-    if not feedback or feedback.strip() == "":
-        return {"needs_retry": False, "reason": "No feedback provided", "additional_info_needed": []}
+    quality_check_prompt = f"""당신은 AI 검토 프로세스의 품질 관리 orchestrator입니다.
+{agent_name}가 다음과 같은 분석 결과를 제출했습니다.
 
-    analysis_prompt = f"""당신은 AI 검토 프로세스의 orchestrator입니다.
-다음은 {agent_name}의 검토 결과에 대한 사용자 피드백입니다:
+제안서 내용:
+{proposal_text[:500]}...
 
-피드백:
-{feedback}
+{agent_name}의 분석 결과:
+{analysis_result}
 
-위 피드백을 분석하여 다음을 판단해주세요:
+위 분석 결과가 충분히 상세하고 구체적인지 평가해주세요.
 
-1. 추가 정보가 필요한가? (예: 구체적인 데이터 요청, 추가 분석 요청, 명확화 요청 등)
-2. 단순히 확인/승인하는 내용인가?
-3. 수정 제안만 포함하고 있는가?
+**재검토가 필요한 경우 (needs_retry = true):**
+- 분석 내용이 너무 짧거나 추상적인 경우 (2-3문장 미만)
+- 구체적인 근거나 데이터가 부족한 경우
+- 핵심 질문에 대한 답변이 불충분한 경우
+- "평가 필요", "추가 검토 필요" 등 모호한 표현만 있는 경우
+- 제안서 내용을 제대로 반영하지 않은 경우
 
-다음 형식의 JSON으로만 응답해주세요 (다른 설명 없이):
+**재검토가 불필요한 경우 (needs_retry = false):**
+- 분석이 상세하고 구체적인 경우
+- 명확한 근거와 함께 판단이 제시된 경우
+- 요구사항에 맞게 충분한 정보를 제공한 경우
+- 각 평가 항목이 구체적으로 설명된 경우
+
+반드시 다음 JSON 형식으로만 응답하세요 (설명 없이 JSON만):
 {{
-    "needs_retry": true/false,
-    "reason": "재검토가 필요한 구체적인 이유 또는 '재검토 불필요'",
-    "additional_info_needed": ["항목1", "항목2", ...]
+    "needs_retry": true,
+    "reason": "분석 내용이 너무 간략하고 구체적인 근거가 부족함",
+    "additional_info_needed": ["구체적인 데이터", "상세한 근거", "명확한 판단 기준"]
 }}
 
-판단 기준:
-- needs_retry = true: 피드백에 "추가로", "더 자세히", "구체적으로", "명확히" 등의 요청이 있거나, 새로운 분석/데이터를 요구하는 경우
-- needs_retry = false: 단순 확인, 승인, 일반적인 수정 제안만 있는 경우"""
+또는
+
+{{
+    "needs_retry": false,
+    "reason": "분석이 충분히 상세하고 구체적임",
+    "additional_info_needed": []
+}}"""
 
     try:
-        result = call_ollama(analysis_prompt)
-        print(f"[DEBUG] Feedback analysis result: {result[:200]}...")
+        result = call_ollama(quality_check_prompt)
+        print(f"[DEBUG] Raw quality check response: {result}")
 
         # JSON 파싱
         import json
-        # JSON 부분만 추출 (```json ``` 제거)
         json_str = result.strip()
         if "```json" in json_str:
             json_str = json_str.split("```json")[1].split("```")[0].strip()
         elif "```" in json_str:
             json_str = json_str.split("```")[1].split("```")[0].strip()
 
+        print(f"[DEBUG] Extracted JSON string: {json_str}")
         analysis = json.loads(json_str)
+        print(f"[DEBUG] Parsed quality analysis: {analysis}")
+
+        # needs_retry가 boolean이 아니면 변환
+        if isinstance(analysis.get("needs_retry"), str):
+            analysis["needs_retry"] = analysis["needs_retry"].lower() in ["true", "yes", "1"]
+
         return analysis
     except Exception as e:
-        print(f"[DEBUG] Failed to parse feedback analysis: {e}, treating as no retry needed")
-        return {"needs_retry": False, "reason": "Analysis failed", "additional_info_needed": []}
+        print(f"[DEBUG] Failed to parse quality analysis: {e}")
+        print(f"[DEBUG] Raw result was: {result if 'result' in locals() else 'No result'}")
+
+        # 파싱 실패 시 간단한 휴리스틱 판단
+        # 분석 결과가 너무 짧으면 재시도
+        if len(analysis_result.strip()) < 100:
+            print(f"[DEBUG] Fallback: Analysis too short, enabling retry")
+            return {"needs_retry": True, "reason": "분석 결과가 너무 짧음 (100자 미만)", "additional_info_needed": ["더 상세한 분석"]}
+
+        return {"needs_retry": False, "reason": "Quality check failed - defaulting to no retry", "additional_info_needed": []}
 
 def generate_feedback_suggestion(agent_name: str, analysis_result: str, proposal_text: str) -> str:
     """에이전트 분석 결과를 바탕으로 구체적인 피드백 제안 생성"""
@@ -384,7 +411,7 @@ async def process_review(job_id: int):
             return
 
         # HITL 단계 설정 가져오기
-        hitl_stages = job.get("hitl_stages", [2])
+        hitl_stages = job.get("hitl_stages", [])
         print(f"HITL stages enabled: {hitl_stages}")
 
         # HITL 재시도 카운터 초기화 (각 에이전트당 최대 3회)
@@ -452,6 +479,16 @@ async def process_review(job_id: int):
         if 2 in hitl_stages:
             agent_num = 2
             while True:
+                # LLM이 분석 결과 품질 평가
+                quality_check = await asyncio.to_thread(
+                    analyze_result_quality,
+                    "Objective Reviewer",
+                    objective_review,
+                    proposal_text
+                )
+
+                print(f"[DEBUG] Quality check for Agent 2: {quality_check}")
+
                 # 피드백 제안 생성
                 feedback_suggestion = await asyncio.to_thread(
                     generate_feedback_suggestion,
@@ -459,31 +496,65 @@ async def process_review(job_id: int):
                     objective_review,
                     proposal_text
                 )
-                print(f"[DEBUG] Sending HITL interrupt with feedback_suggestion: {len(feedback_suggestion)} chars")
 
                 if ws:
                     await ws.send_json({
                         "status": "interrupt",
-                        "message": f"검토 결과를 확인하고 피드백을 제공해주세요 (재시도 {hitl_retry_counts[agent_num]}/{MAX_HITL_RETRIES})",
+                        "message": f"검토 결과를 확인해주세요 (재시도 {hitl_retry_counts[agent_num]}/{MAX_HITL_RETRIES}) - 품질: {quality_check.get('reason', '')}",
                         "results": {
                             "objective_review": objective_review,
-                            "feedback_suggestion": feedback_suggestion
+                            "feedback_suggestion": feedback_suggestion,
+                            "quality_check": quality_check
                         }
                     })
-                    print(f"[DEBUG] HITL interrupt sent via WebSocket")
 
-                # 피드백 대기
+                # 사용자가 결과를 확인할 때까지 대기
                 await wait_for_feedback(job_id)
 
-                # 피드백 분석
-                job = get_job(job_id)
-                user_feedback = job.get("feedback", "")
+                # 사용자 피드백 가져오기
+                updated_job = get_job(job_id)
+                user_feedback = updated_job.get("feedback", "").strip()
 
-                retry_decision = await asyncio.to_thread(
-                    analyze_feedback_for_retry,
-                    user_feedback,
-                    "Objective Reviewer"
-                )
+                print(f"[DEBUG] User feedback retrieved: '{user_feedback}'")
+
+                # 사용자 피드백이 있으면 LLM이 재시도 필요성 분석
+                if user_feedback:
+                    feedback_analysis_prompt = f"""당신은 AI 검토 프로세스의 orchestrator입니다.
+사용자가 다음과 같은 피드백을 제공했습니다:
+
+사용자 피드백: {user_feedback}
+
+이전 분석 결과:
+{objective_review}
+
+사용자 피드백을 보고 재검토가 필요한지 판단해주세요.
+
+**재검토가 필요한 경우 (needs_retry = true):**
+- 사용자가 추가 정보, 더 자세한 분석, 보완을 요청한 경우
+- 피드백에 "더", "추가", "보완", "재검토", "다시" 등의 키워드가 있는 경우
+
+**재검토가 불필요한 경우 (needs_retry = false):**
+- 피드백이 없거나 빈 문자열인 경우
+- "좋다", "승인", "확인", "다음" 등 긍정적 피드백만 있는 경우
+
+반드시 다음 JSON 형식으로만 응답하세요:
+{{"needs_retry": true/false, "reason": "...", "additional_info_needed": [...]}}"""
+
+                    retry_decision = await asyncio.to_thread(call_ollama, feedback_analysis_prompt)
+
+                    # JSON 파싱
+                    try:
+                        import re
+                        json_match = re.search(r'\{.*\}', retry_decision, re.DOTALL)
+                        if json_match:
+                            retry_decision = json.loads(json_match.group())
+                        else:
+                            retry_decision = {"needs_retry": True, "reason": "피드백 분석"}
+                    except:
+                        retry_decision = {"needs_retry": True, "reason": "피드백 분석"}
+                else:
+                    # 피드백이 없으면 품질 검사 결과 사용
+                    retry_decision = quality_check
 
                 print(f"[DEBUG] Retry decision for Agent 2: {retry_decision}")
 
@@ -496,30 +567,30 @@ async def process_review(job_id: int):
                         await ws.send_json({
                             "status": "processing",
                             "agent": "Objective_Reviewer",
-                            "message": f"추가 정보 반영하여 재검토 중... ({hitl_retry_counts[agent_num]}/{MAX_HITL_RETRIES})"
+                            "message": f"품질 개선을 위해 재검토 중... ({hitl_retry_counts[agent_num]}/{MAX_HITL_RETRIES})"
                         })
 
-                    # 피드백을 반영하여 재검토
+                    # 품질 검사 결과를 반영하여 재검토
                     retry_prompt = f"""당신은 기업의 AI 과제 제안서를 검토하는 전문가입니다.
-이전 검토에 대한 사용자 피드백을 반영하여 재검토해주세요.
+이전 검토 결과가 품질 기준을 충족하지 못했습니다. 더 상세하고 구체적으로 재검토해주세요.
 
 제안서 내용:
 {proposal_text}
 
-이전 검토 결과:
+이전 검토 결과 (불충분):
 {objective_review}
 
-사용자 피드백:
-{user_feedback}
+품질 검사 결과:
+- 문제점: {retry_decision.get('reason', '분석이 불충분함')}
+- 보완 필요 사항: {', '.join(retry_decision.get('additional_info_needed', ['더 상세한 분석', '구체적인 근거', '명확한 판단']))}
 
-필요한 추가 정보: {', '.join(retry_decision.get('additional_info_needed', []))}
+위 문제점을 해결하고 다음 항목을 **구체적이고 상세하게** 재평가해주세요:
+1. 목표의 명확성 (제안서에 명시된 구체적인 목표 인용)
+2. 조직 전략과의 정렬성 (어떤 전략 목표와 어떻게 연결되는지)
+3. 실현 가능성 (구체적인 가능/불가능 근거)
 
-피드백을 반영하여 다음 항목을 재평가하고 짧게 요약해주세요:
-1. 목표의 명확성
-2. 조직 전략과의 정렬성
-3. 실현 가능성
-
-간결하게 2-3문장으로 평가 결과를 작성해주세요."""
+**반드시 5-7문장 이상으로 구체적인 근거와 함께 평가 결과를 작성해주세요.**
+각 항목마다 명확한 판단과 그 이유를 제시하세요."""
 
                     objective_review = await asyncio.to_thread(call_ollama, retry_prompt)
 
@@ -576,6 +647,16 @@ async def process_review(job_id: int):
         if 3 in hitl_stages:
             agent_num = 3
             while True:
+                # LLM이 분석 결과 품질 평가
+                quality_check = await asyncio.to_thread(
+                    analyze_result_quality,
+                    "Data Analyzer",
+                    data_analysis,
+                    proposal_text
+                )
+
+                print(f"[DEBUG] Quality check for Agent 3: {quality_check}")
+
                 feedback_suggestion = await asyncio.to_thread(
                     generate_feedback_suggestion,
                     "Data Analyzer",
@@ -586,23 +667,61 @@ async def process_review(job_id: int):
                 if ws:
                     await ws.send_json({
                         "status": "interrupt",
-                        "message": f"데이터 분석 결과를 확인하고 피드백을 제공해주세요 (재시도 {hitl_retry_counts[agent_num]}/{MAX_HITL_RETRIES})",
+                        "message": f"데이터 분석 결과 확인 중... (재시도 {hitl_retry_counts[agent_num]}/{MAX_HITL_RETRIES}) - {quality_check.get('reason', '')}",
                         "results": {
                             "data_analysis": data_analysis,
-                            "feedback_suggestion": feedback_suggestion
+                            "feedback_suggestion": feedback_suggestion,
+                            "quality_check": quality_check
                         }
                     })
 
+                # 사용자가 결과를 확인할 때까지 대기
                 await wait_for_feedback(job_id)
 
-                job = get_job(job_id)
-                user_feedback = job.get("feedback", "")
+                # 사용자 피드백 가져오기
+                updated_job = get_job(job_id)
+                user_feedback = updated_job.get("feedback", "").strip()
 
-                retry_decision = await asyncio.to_thread(
-                    analyze_feedback_for_retry,
-                    user_feedback,
-                    "Data Analyzer"
-                )
+                print(f"[DEBUG] User feedback retrieved: '{user_feedback}'")
+
+                # 사용자 피드백이 있으면 LLM이 재시도 필요성 분석
+                if user_feedback:
+                    feedback_analysis_prompt = f"""당신은 AI 검토 프로세스의 orchestrator입니다.
+사용자가 다음과 같은 피드백을 제공했습니다:
+
+사용자 피드백: {user_feedback}
+
+이전 분석 결과:
+{data_analysis}
+
+사용자 피드백을 보고 재검토가 필요한지 판단해주세요.
+
+**재검토가 필요한 경우 (needs_retry = true):**
+- 사용자가 추가 정보, 더 자세한 분석, 보완을 요청한 경우
+- 피드백에 "더", "추가", "보완", "재검토", "다시" 등의 키워드가 있는 경우
+
+**재검토가 불필요한 경우 (needs_retry = false):**
+- 피드백이 없거나 빈 문자열인 경우
+- "좋다", "승인", "확인", "다음" 등 긍정적 피드백만 있는 경우
+
+반드시 다음 JSON 형식으로만 응답하세요:
+{{"needs_retry": true/false, "reason": "...", "additional_info_needed": [...]}}"""
+
+                    retry_decision = await asyncio.to_thread(call_ollama, feedback_analysis_prompt)
+
+                    # JSON 파싱
+                    try:
+                        import re
+                        json_match = re.search(r'\{.*\}', retry_decision, re.DOTALL)
+                        if json_match:
+                            retry_decision = json.loads(json_match.group())
+                        else:
+                            retry_decision = {"needs_retry": True, "reason": "피드백 분석"}
+                    except:
+                        retry_decision = {"needs_retry": True, "reason": "피드백 분석"}
+                else:
+                    # 피드백이 없으면 품질 검사 결과 사용
+                    retry_decision = quality_check
 
                 print(f"[DEBUG] Retry decision for Agent 3: {retry_decision}")
 
@@ -614,29 +733,28 @@ async def process_review(job_id: int):
                         await ws.send_json({
                             "status": "processing",
                             "agent": "Data_Analyzer",
-                            "message": f"추가 정보 반영하여 재검토 중... ({hitl_retry_counts[agent_num]}/{MAX_HITL_RETRIES})"
+                            "message": f"품질 개선을 위해 재검토 중... ({hitl_retry_counts[agent_num]}/{MAX_HITL_RETRIES})"
                         })
 
                     retry_prompt = f"""당신은 AI 프로젝트의 데이터 분석 전문가입니다.
-이전 분석에 대한 사용자 피드백을 반영하여 재분석해주세요.
+이전 분석 결과가 품질 기준을 충족하지 못했습니다. 더 상세하고 구체적으로 재분석해주세요.
 
 제안서 내용:
 {proposal_text}
 
-이전 분석 결과:
+이전 분석 결과 (불충분):
 {data_analysis}
 
-사용자 피드백:
-{user_feedback}
+품질 검사 결과:
+- 문제점: {retry_decision.get('reason', '분석이 불충분함')}
+- 보완 필요 사항: {', '.join(retry_decision.get('additional_info_needed', ['더 상세한 분석', '구체적인 근거']))}
 
-필요한 추가 정보: {', '.join(retry_decision.get('additional_info_needed', []))}
+위 문제점을 해결하고 다음 항목을 **구체적이고 상세하게** 재평가해주세요:
+1. 데이터 확보 가능성 (어떤 데이터가 필요하고, 어디서 확보 가능한지)
+2. 데이터 품질 예상 (품질 수준과 그 근거)
+3. 데이터 접근성 (접근 방법과 제약사항)
 
-피드백을 반영하여 다음 항목을 재평가하고 짧게 요약해주세요:
-1. 데이터 확보 가능성
-2. 데이터 품질 예상
-3. 데이터 접근성
-
-간결하게 2-3문장으로 평가 결과를 작성해주세요."""
+**반드시 5-7문장 이상으로 구체적인 근거와 함께 평가 결과를 작성해주세요.**"""
 
                     data_analysis = await asyncio.to_thread(call_ollama, retry_prompt)
 
@@ -690,6 +808,14 @@ async def process_review(job_id: int):
         if 4 in hitl_stages:
             agent_num = 4
             while True:
+                quality_check = await asyncio.to_thread(
+                    analyze_result_quality,
+                    "Risk Analyzer",
+                    risk_analysis,
+                    proposal_text
+                )
+                print(f"[DEBUG] Quality check for Agent 4: {quality_check}")
+
                 feedback_suggestion = await asyncio.to_thread(
                     generate_feedback_suggestion,
                     "Risk Analyzer",
@@ -700,24 +826,18 @@ async def process_review(job_id: int):
                 if ws:
                     await ws.send_json({
                         "status": "interrupt",
-                        "message": f"리스크 분석 결과를 확인하고 피드백을 제공해주세요 (재시도 {hitl_retry_counts[agent_num]}/{MAX_HITL_RETRIES})",
+                        "message": f"리스크 분석 결과 확인 중... (재시도 {hitl_retry_counts[agent_num]}/{MAX_HITL_RETRIES}) - {quality_check.get('reason', '')}",
                         "results": {
                             "risk_analysis": risk_analysis,
-                            "feedback_suggestion": feedback_suggestion
+                            "feedback_suggestion": feedback_suggestion,
+                            "quality_check": quality_check
                         }
                     })
 
+                # 사용자가 결과를 확인할 때까지 대기
                 await wait_for_feedback(job_id)
 
-                job = get_job(job_id)
-                user_feedback = job.get("feedback", "")
-
-                retry_decision = await asyncio.to_thread(
-                    analyze_feedback_for_retry,
-                    user_feedback,
-                    "Risk Analyzer"
-                )
-
+                retry_decision = quality_check
                 print(f"[DEBUG] Retry decision for Agent 4: {retry_decision}")
 
                 if retry_decision.get("needs_retry") and hitl_retry_counts[agent_num] < MAX_HITL_RETRIES:
@@ -728,29 +848,28 @@ async def process_review(job_id: int):
                         await ws.send_json({
                             "status": "processing",
                             "agent": "Risk_Analyzer",
-                            "message": f"추가 정보 반영하여 재검토 중... ({hitl_retry_counts[agent_num]}/{MAX_HITL_RETRIES})"
+                            "message": f"품질 개선을 위해 재검토 중... ({hitl_retry_counts[agent_num]}/{MAX_HITL_RETRIES})"
                         })
 
                     retry_prompt = f"""당신은 AI 프로젝트의 리스크 분석 전문가입니다.
-이전 분석에 대한 사용자 피드백을 반영하여 재분석해주세요.
+이전 분석 결과가 품질 기준을 충족하지 못했습니다. 더 상세하고 구체적으로 재분석해주세요.
 
 제안서 내용:
 {proposal_text}
 
-이전 분석 결과:
+이전 분석 결과 (불충분):
 {risk_analysis}
 
-사용자 피드백:
-{user_feedback}
+품질 검사 결과:
+- 문제점: {retry_decision.get('reason', '분석이 불충분함')}
+- 보완 필요 사항: {', '.join(retry_decision.get('additional_info_needed', ['더 상세한 분석']))}
 
-필요한 추가 정보: {', '.join(retry_decision.get('additional_info_needed', []))}
+위 문제점을 해결하고 다음 리스크를 **구체적이고 상세하게** 재평가해주세요:
+1. 기술적 리스크 (구체적인 기술 문제점과 영향)
+2. 일정 리스크 (지연 가능성과 원인)
+3. 인력 리스크 (필요 역량과 확보 가능성)
 
-피드백을 반영하여 다음 리스크를 재평가하고 각각 짧게 요약해주세요:
-1. 기술적 리스크
-2. 일정 리스크
-3. 인력 리스크
-
-각 항목마다 1-2문장으로 평가 결과를 작성해주세요."""
+**반드시 5-7문장 이상으로 각 리스크마다 명확한 평가와 근거를 제시하세요.**"""
 
                     risk_analysis = await asyncio.to_thread(call_ollama, retry_prompt)
 
@@ -803,6 +922,14 @@ async def process_review(job_id: int):
         if 5 in hitl_stages:
             agent_num = 5
             while True:
+                quality_check = await asyncio.to_thread(
+                    analyze_result_quality,
+                    "ROI Estimator",
+                    roi_estimation,
+                    proposal_text
+                )
+                print(f"[DEBUG] Quality check for Agent 5: {quality_check}")
+
                 feedback_suggestion = await asyncio.to_thread(
                     generate_feedback_suggestion,
                     "ROI Estimator",
@@ -813,24 +940,18 @@ async def process_review(job_id: int):
                 if ws:
                     await ws.send_json({
                         "status": "interrupt",
-                        "message": f"ROI 추정 결과를 확인하고 피드백을 제공해주세요 (재시도 {hitl_retry_counts[agent_num]}/{MAX_HITL_RETRIES})",
+                        "message": f"ROI 추정 결과 확인 중... (재시도 {hitl_retry_counts[agent_num]}/{MAX_HITL_RETRIES}) - {quality_check.get('reason', '')}",
                         "results": {
                             "roi_estimation": roi_estimation,
-                            "feedback_suggestion": feedback_suggestion
+                            "feedback_suggestion": feedback_suggestion,
+                            "quality_check": quality_check
                         }
                     })
 
+                # 사용자가 결과를 확인할 때까지 대기
                 await wait_for_feedback(job_id)
 
-                job = get_job(job_id)
-                user_feedback = job.get("feedback", "")
-
-                retry_decision = await asyncio.to_thread(
-                    analyze_feedback_for_retry,
-                    user_feedback,
-                    "ROI Estimator"
-                )
-
+                retry_decision = quality_check
                 print(f"[DEBUG] Retry decision for Agent 5: {retry_decision}")
 
                 if retry_decision.get("needs_retry") and hitl_retry_counts[agent_num] < MAX_HITL_RETRIES:
@@ -841,28 +962,27 @@ async def process_review(job_id: int):
                         await ws.send_json({
                             "status": "processing",
                             "agent": "ROI_Estimator",
-                            "message": f"추가 정보 반영하여 재검토 중... ({hitl_retry_counts[agent_num]}/{MAX_HITL_RETRIES})"
+                            "message": f"품질 개선을 위해 재검토 중... ({hitl_retry_counts[agent_num]}/{MAX_HITL_RETRIES})"
                         })
 
                     retry_prompt = f"""당신은 AI 프로젝트의 ROI(투자 수익률) 분석 전문가입니다.
-이전 분석에 대한 사용자 피드백을 반영하여 ROI를 재추정해주세요.
+이전 분석 결과가 품질 기준을 충족하지 못했습니다. 더 상세하고 구체적으로 ROI를 재추정해주세요.
 
 제안서 내용:
 {proposal_text}
 
-이전 분석 결과:
+이전 분석 결과 (불충분):
 {roi_estimation}
 
-사용자 피드백:
-{user_feedback}
+품질 검사 결과:
+- 문제점: {retry_decision.get('reason', '분석이 불충분함')}
+- 보완 필요 사항: {', '.join(retry_decision.get('additional_info_needed', ['더 상세한 분석']))}
 
-필요한 추가 정보: {', '.join(retry_decision.get('additional_info_needed', []))}
+위 문제점을 해결하고 다음 항목을 **구체적이고 상세하게** 재평가해주세요:
+1. 예상 효과 (구체적인 수치와 근거)
+2. 투자 대비 효과 (명확한 ROI 계산 근거)
 
-피드백을 반영하여 다음 항목을 재평가하고 짧게 요약해주세요:
-1. 예상 효과 (비용 절감, 생산성 향상 등)
-2. 투자 대비 효과 (ROI 퍼센티지, 손익분기점)
-
-간결하게 2-3문장으로 평가 결과를 작성해주세요."""
+**반드시 5-7문장 이상으로 수치와 계산 근거를 포함하여 작성해주세요.**"""
 
                     roi_estimation = await asyncio.to_thread(call_ollama, retry_prompt)
 
@@ -928,36 +1048,36 @@ ROI 추정:
         if 6 in hitl_stages:
             agent_num = 6
             while True:
+                quality_check = await asyncio.to_thread(
+                    analyze_result_quality,
+                    "Final Generator",
+                    final_recommendation,
+                    proposal_text
+                )
+                print(f"[DEBUG] Quality check for Agent 6: {quality_check}")
+
                 feedback_suggestion = await asyncio.to_thread(
                     generate_feedback_suggestion,
                     "Final Generator",
                     final_recommendation,
                     proposal_text
                 )
-                print(f"[DEBUG] Sending HITL interrupt with feedback_suggestion: {len(feedback_suggestion)} chars")
 
                 if ws:
                     await ws.send_json({
                         "status": "interrupt",
-                        "message": f"최종 의견을 확인하고 피드백을 제공해주세요 (재시도 {hitl_retry_counts[agent_num]}/{MAX_HITL_RETRIES})",
+                        "message": f"최종 의견 확인 중... (재시도 {hitl_retry_counts[agent_num]}/{MAX_HITL_RETRIES}) - {quality_check.get('reason', '')}",
                         "results": {
                             "final_recommendation": final_recommendation,
-                            "feedback_suggestion": feedback_suggestion
+                            "feedback_suggestion": feedback_suggestion,
+                            "quality_check": quality_check
                         }
                     })
-                    print(f"[DEBUG] HITL interrupt sent via WebSocket")
 
+                # 사용자가 결과를 확인할 때까지 대기
                 await wait_for_feedback(job_id)
 
-                job = get_job(job_id)
-                user_feedback = job.get("feedback", "")
-
-                retry_decision = await asyncio.to_thread(
-                    analyze_feedback_for_retry,
-                    user_feedback,
-                    "Final Generator"
-                )
-
+                retry_decision = quality_check
                 print(f"[DEBUG] Retry decision for Agent 6: {retry_decision}")
 
                 if retry_decision.get("needs_retry") and hitl_retry_counts[agent_num] < MAX_HITL_RETRIES:
@@ -968,11 +1088,11 @@ ROI 추정:
                         await ws.send_json({
                             "status": "processing",
                             "agent": "Final_Generator",
-                            "message": f"추가 정보 반영하여 재검토 중... ({hitl_retry_counts[agent_num]}/{MAX_HITL_RETRIES})"
+                            "message": f"품질 개선을 위해 재검토 중... ({hitl_retry_counts[agent_num]}/{MAX_HITL_RETRIES})"
                         })
 
                     retry_prompt = f"""당신은 AI 프로젝트 검토 전문가입니다.
-이전 최종 의견에 대한 사용자 피드백을 반영하여 최종 의견을 재작성해주세요.
+이전 최종 의견이 품질 기준을 충족하지 못했습니다. 더 상세하고 구체적으로 최종 의견을 재작성해주세요.
 
 제안서 내용:
 {proposal_text}
@@ -989,20 +1109,19 @@ ROI 추정:
 ROI 추정:
 {roi_estimation}
 
-이전 최종 의견:
+이전 최종 의견 (불충분):
 {final_recommendation}
 
-사용자 피드백:
-{user_feedback}
+품질 검사 결과:
+- 문제점: {retry_decision.get('reason', '의견이 불충분함')}
+- 보완 필요 사항: {', '.join(retry_decision.get('additional_info_needed', ['더 명확한 판단', '구체적인 근거']))}
 
-필요한 추가 정보: {', '.join(retry_decision.get('additional_info_needed', []))}
+위 문제점을 해결하고 다음을 포함한 **구체적이고 명확한** 최종 의견을 작성해주세요:
+1. 승인/보류 권장 (명확한 결정과 이유)
+2. 주요 근거 (구체적인 데이터와 분석 결과 인용)
+3. 실행 권장사항 (구체적이고 실현 가능한 제안)
 
-피드백을 반영하여 다음을 포함한 최종 의견을 재작성해주세요:
-1. 승인 또는 보류 권장 (명확하게)
-2. 주요 근거 (3-4가지)
-3. 권장사항 (2-3가지)
-
-간결하게 5-7문장으로 작성해주세요."""
+**반드시 7-10문장 이상으로 명확한 판단과 상세한 근거를 포함하여 작성해주세요.**"""
 
                     final_recommendation = await asyncio.to_thread(call_ollama, retry_prompt)
 
@@ -1146,10 +1265,19 @@ async def websocket_endpoint(websocket: WebSocket, job_id: str):
 @app.post("/api/v1/review/feedback/{job_id}")
 async def submit_feedback(job_id: int, feedback: dict):
     """HITL 피드백 제출"""
-    print(f"Feedback received (Job {job_id}): {feedback}")
+    print(f"[DEBUG] Feedback received (Job {job_id}): {feedback}")
+
+    # 피드백 텍스트 추출
+    feedback_text = feedback.get("feedback", "")
+    print(f"[DEBUG] Feedback text: {feedback_text}")
+
+    # 피드백을 job의 metadata에 저장
+    update_job_feedback(job_id, feedback_text)
 
     # DB 상태를 feedback_received로 업데이트
     update_job_status(job_id, "feedback_received")
+
+    print(f"[DEBUG] Feedback saved and status updated for job {job_id}")
 
     return {"status": "feedback_received", "job_id": job_id}
 

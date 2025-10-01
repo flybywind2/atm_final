@@ -13,123 +13,128 @@
             <p>전사 업무 영역 특화 과제 지원서 자동 검토</p>
         </header>
 
+        <!-- Floating BP Cases Panel -->
+        <div id="bp-cases-floating">
+            <div id="bp-cases-floating-header">
+                <span>📚 검색된 BP 사례</span>
+                <div id="bp-cases-floating-controls">
+                    <button class="floating-btn" id="toggle-bp-btn" title="접기/펴기">−</button>
+                    <button class="floating-btn" id="close-bp-btn" title="닫기">×</button>
+                </div>
+            </div>
+            <div id="bp-cases-floating-content"></div>
+        </div>
+
         <main>
             <!-- 제안서 입력 -->
-            <section id="upload-section" class="card">
-                <h2>📝 제안서 입력</h2>
-                <div class="form-group">
-                    <label>업무 도메인:</label>
-                    <select id="domain-select" class="input-field">
-                        <option value="제조">제조/생산</option>
-                        <option value="연구개발">연구개발</option>
-                        <option value="설계">설계</option>
-                        <option value="IT/DX">IT/DX</option>
-                        <option value="경영">경영/기획</option>
-                        <option value="품질">품질</option>
-                        <option value="영업">영업/마케팅</option>
-                        <option value="HR">HR/교육</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label>사업부:</label>
-                    <select id="division-select" class="input-field">
-                        <option value="메모리">메모리</option>
-                        <option value="S.LSI">S.LSI</option>
-                        <option value="Foundry">Foundry</option>
-                    </select>
-                </div>
+            <div>
+                <section id="upload-section" class="card">
+                    <h2>📝 제안서 입력</h2>
+                    <div class="form-group">
+                        <label>업무 도메인:</label>
+                        <select id="domain-select" class="input-field">
+                            <option value="제조">제조/생산</option>
+                            <option value="연구개발">연구개발</option>
+                            <option value="설계">설계</option>
+                            <option value="IT/DX">IT/DX</option>
+                            <option value="경영">경영/기획</option>
+                            <option value="품질">품질</option>
+                            <option value="영업">영업/마케팅</option>
+                            <option value="HR">HR/교육</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>사업부:</label>
+                        <select id="division-select" class="input-field">
+                            <option value="메모리">메모리</option>
+                            <option value="S.LSI">S.LSI</option>
+                            <option value="Foundry">Foundry</option>
+                        </select>
+                    </div>
 
-                <!-- HITL 단계 선택 -->
-                <div class="form-group">
-                    <label>인간 검토(HITL) 활성화 단계:</label>
-                    <div style="padding-left: 10px;">
-                        <label style="display: block; margin: 5px 0;">
-                            <input type="checkbox" name="hitl-stage" value="2" checked>
-                            Agent 2 (Objective Reviewer) 이후
+                    <!-- HITL 단계 선택 -->
+                    <div class="form-group">
+                        <label>인간 검토(HITL) 활성화 단계:</label>
+                        <div style="padding-left: 10px;">
+                            <label style="display: block; margin: 5px 0;">
+                                <input type="checkbox" name="hitl-stage" value="2">
+                                Agent 2 (Objective Reviewer) 이후
+                            </label>
+                            <label style="display: block; margin: 5px 0;">
+                                <input type="checkbox" name="hitl-stage" value="3">
+                                Agent 3 (Data Analyzer) 이후
+                            </label>
+                            <label style="display: block; margin: 5px 0;">
+                                <input type="checkbox" name="hitl-stage" value="4">
+                                Agent 4 (Risk Analyzer) 이후
+                            </label>
+                            <label style="display: block; margin: 5px 0;">
+                                <input type="checkbox" name="hitl-stage" value="5">
+                                Agent 5 (ROI Estimator) 이후
+                            </label>
+                            <label style="display: block; margin: 5px 0;">
+                                <input type="checkbox" name="hitl-stage" value="6">
+                                Agent 6 (Final Generator) 이후
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- 입력 방식 선택 -->
+                    <div class="form-group">
+                        <label>
+                            <input type="radio" name="input-type" value="file" checked>
+                            파일 업로드
                         </label>
-                        <label style="display: block; margin: 5px 0;">
-                            <input type="checkbox" name="hitl-stage" value="3">
-                            Agent 3 (Data Analyzer) 이후
-                        </label>
-                        <label style="display: block; margin: 5px 0;">
-                            <input type="checkbox" name="hitl-stage" value="4">
-                            Agent 4 (Risk Analyzer) 이후
-                        </label>
-                        <label style="display: block; margin: 5px 0;">
-                            <input type="checkbox" name="hitl-stage" value="5">
-                            Agent 5 (ROI Estimator) 이후
-                        </label>
-                        <label style="display: block; margin: 5px 0;">
-                            <input type="checkbox" name="hitl-stage" value="6">
-                            Agent 6 (Final Generator) 이후
+                        <label>
+                            <input type="radio" name="input-type" value="text">
+                            직접 작성
                         </label>
                     </div>
-                </div>
 
-                <!-- 입력 방식 선택 -->
-                <div class="form-group">
-                    <label>
-                        <input type="radio" name="input-type" value="file" checked>
-                        파일 업로드
-                    </label>
-                    <label>
-                        <input type="radio" name="input-type" value="text">
-                        직접 작성
-                    </label>
-                </div>
+                    <!-- 파일 업로드 -->
+                    <div id="file-upload-container" class="form-group">
+                        <input type="file" id="file-input" accept=".txt,.md,.pdf,.docx" class="input-field">
+                    </div>
 
-                <!-- 파일 업로드 -->
-                <div id="file-upload-container" class="form-group">
-                    <input type="file" id="file-input" accept=".txt,.md,.pdf,.docx" class="input-field">
-                </div>
+                    <!-- 텍스트 직접 입력 -->
+                    <div id="text-input-container" class="form-group" style="display: none;">
+                        <textarea id="text-input" rows="15" placeholder="제안서 내용을 입력하세요..." class="input-field"></textarea>
+                    </div>
 
-                <!-- 텍스트 직접 입력 -->
-                <div id="text-input-container" class="form-group" style="display: none;">
-                    <textarea id="text-input" rows="15" placeholder="제안서 내용을 입력하세요..." class="input-field"></textarea>
-                </div>
-
-                <button id="submit-btn" class="btn-primary">🚀 검토 시작</button>
-            </section>
+                    <button id="submit-btn" class="btn-primary">🚀 검토 시작</button>
+                </section>
+            </div>
 
             <!-- 진행 상황 -->
             <section id="progress-section" class="card" style="display: none;">
                 <h2>⏳ 검토 진행 상황</h2>
-                <div style="display: flex; gap: 20px;">
-                    <div style="flex: 1;">
-                        <div id="agent-status">
-                            <div class="agent-item">
-                                <span class="agent-name">1. BP Case Scouter</span>
-                                <span id="agent-1-status" class="status-badge">대기중</span>
-                            </div>
-                            <div class="agent-item">
-                                <span class="agent-name">2. Objective Reviewer</span>
-                                <span id="agent-2-status" class="status-badge">대기중</span>
-                            </div>
-                            <div class="agent-item">
-                                <span class="agent-name">3. Data Analyzer</span>
-                                <span id="agent-3-status" class="status-badge">대기중</span>
-                            </div>
-                            <div class="agent-item">
-                                <span class="agent-name">4. Risk Analyzer</span>
-                                <span id="agent-4-status" class="status-badge">대기중</span>
-                            </div>
-                            <div class="agent-item">
-                                <span class="agent-name">5. ROI Estimator</span>
-                                <span id="agent-5-status" class="status-badge">대기중</span>
-                            </div>
-                            <div class="agent-item">
-                                <span class="agent-name">6. Final Generator</span>
-                                <span id="agent-6-status" class="status-badge">대기중</span>
-                            </div>
-                        </div>
-                        <div id="progress-message"></div>
+                <div id="agent-status">
+                    <div class="agent-item">
+                        <span class="agent-name">1. BP Case Scouter</span>
+                        <span id="agent-1-status" class="status-badge">대기중</span>
                     </div>
-                    <div id="bp-cases-panel" style="flex: 1; display: none;">
-                        <h3 style="margin-top: 0;">📚 검색된 BP 사례</h3>
-                        <div id="bp-cases-content" style="background: #f9f9f9; padding: 15px; border-radius: 8px; max-height: 400px; overflow-y: auto;">
-                        </div>
+                    <div class="agent-item">
+                        <span class="agent-name">2. Objective Reviewer</span>
+                        <span id="agent-2-status" class="status-badge">대기중</span>
+                    </div>
+                    <div class="agent-item">
+                        <span class="agent-name">3. Data Analyzer</span>
+                        <span id="agent-3-status" class="status-badge">대기중</span>
+                    </div>
+                    <div class="agent-item">
+                        <span class="agent-name">4. Risk Analyzer</span>
+                        <span id="agent-4-status" class="status-badge">대기중</span>
+                    </div>
+                    <div class="agent-item">
+                        <span class="agent-name">5. ROI Estimator</span>
+                        <span id="agent-5-status" class="status-badge">대기중</span>
+                    </div>
+                    <div class="agent-item">
+                        <span class="agent-name">6. Final Generator</span>
+                        <span id="agent-6-status" class="status-badge">대기중</span>
                     </div>
                 </div>
+                <div id="progress-message"></div>
             </section>
 
             <!-- HITL 피드백 -->
