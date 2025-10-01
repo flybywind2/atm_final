@@ -562,6 +562,7 @@ async def process_review(job_id: int, ws_job_key: str | None = None, send_final_
         # HITL 인터럽트: Agent 2 이후 (설정에 따라)
         if 2 in hitl_stages:
             agent_num = 2
+            skip_accepted_agent2 = False
             while True:
                 # LLM이 분석 결과 품질 평가
                 quality_check = await asyncio.to_thread(
@@ -604,8 +605,10 @@ async def process_review(job_id: int, ws_job_key: str | None = None, send_final_
                 print(f"[DEBUG] User feedback retrieved: '{user_feedback}' (skip={skip_requested})")
 
                 if skip_requested:
+                    skip_accepted_agent2 = True
                     retry_decision = {"needs_retry": False, "reason": "사용자가 건너뛰기를 선택"}
                     reset_feedback_state(job_id)
+                    print(f"[DEBUG] HITL skip acknowledged for Agent 2 (job {job_id})")
                 elif user_feedback:
                     retry_decision = {"needs_retry": False, "reason": "사용자 피드백 반영"}
                     reset_feedback_state(job_id)
@@ -614,6 +617,9 @@ async def process_review(job_id: int, ws_job_key: str | None = None, send_final_
                     retry_decision = quality_check
 
                 print(f"[DEBUG] Retry decision for Agent 2: {retry_decision}")
+
+                if skip_accepted_agent2:
+                    break
 
                 # 재시도 필요 여부 판단
                 if retry_decision.get("needs_retry") and hitl_retry_counts[agent_num] < MAX_HITL_RETRIES:
@@ -674,7 +680,16 @@ async def process_review(job_id: int, ws_job_key: str | None = None, send_final_
 
             # 피드백 받은 후 계속 진행
             if ws:
-                await ws.send_json({"status": "processing", "agent": "Data_Analyzer", "message": "피드백 반영하여 분석 계속 진행..."})
+                next_message = (
+                    "사용자 건너뛰기 요청을 수락했습니다. 다음 단계로 진행합니다."
+                    if skip_accepted_agent2
+                    else "피드백 반영하여 분석 계속 진행..."
+                )
+                await ws.send_json({
+                    "status": "processing",
+                    "agent": "Data_Analyzer",
+                    "message": next_message
+                })
             await asyncio.sleep(1)
 
         # Agent 3: Data Analyzer
@@ -703,6 +718,7 @@ async def process_review(job_id: int, ws_job_key: str | None = None, send_final_
         # HITL 인터럽트: Agent 3 이후 (설정에 따라)
         if 3 in hitl_stages:
             agent_num = 3
+            skip_accepted_agent3 = False
             while True:
                 # LLM이 분석 결과 품질 평가
                 quality_check = await asyncio.to_thread(
@@ -744,8 +760,10 @@ async def process_review(job_id: int, ws_job_key: str | None = None, send_final_
                 print(f"[DEBUG] User feedback retrieved: '{user_feedback}' (skip={skip_requested})")
 
                 if skip_requested:
+                    skip_accepted_agent3 = True
                     retry_decision = {"needs_retry": False, "reason": "사용자가 건너뛰기를 선택"}
                     reset_feedback_state(job_id)
+                    print(f"[DEBUG] HITL skip acknowledged for Agent 3 (job {job_id})")
                 elif user_feedback:
                     retry_decision = {"needs_retry": False, "reason": "사용자 피드백 반영"}
                     reset_feedback_state(job_id)
@@ -754,6 +772,9 @@ async def process_review(job_id: int, ws_job_key: str | None = None, send_final_
                     retry_decision = quality_check
 
                 print(f"[DEBUG] Retry decision for Agent 3: {retry_decision}")
+
+                if skip_accepted_agent3:
+                    break
 
                 if retry_decision.get("needs_retry") and hitl_retry_counts[agent_num] < MAX_HITL_RETRIES:
                     hitl_retry_counts[agent_num] += 1
@@ -808,7 +829,16 @@ async def process_review(job_id: int, ws_job_key: str | None = None, send_final_
                     break
 
             if ws:
-                await ws.send_json({"status": "processing", "agent": "Risk_Analyzer", "message": "피드백 반영하여 분석 계속 진행..."})
+                next_message = (
+                    "사용자 건너뛰기 요청을 수락했습니다. 다음 단계로 진행합니다."
+                    if skip_accepted_agent3
+                    else "피드백 반영하여 분석 계속 진행..."
+                )
+                await ws.send_json({
+                    "status": "processing",
+                    "agent": "Risk_Analyzer",
+                    "message": next_message
+                })
             await asyncio.sleep(1)
 
         # Agent 4: Risk Analyzer
@@ -837,6 +867,7 @@ async def process_review(job_id: int, ws_job_key: str | None = None, send_final_
         # HITL 인터럽트: Agent 4 이후 (설정에 따라)
         if 4 in hitl_stages:
             agent_num = 4
+            skip_accepted_agent4 = False
             while True:
                 quality_check = await asyncio.to_thread(
                     analyze_result_quality,
@@ -872,9 +903,13 @@ async def process_review(job_id: int, ws_job_key: str | None = None, send_final_
                 skip_requested = updated_job.get("feedback_skip", False)
                 user_feedback = (updated_job.get("feedback") or "").strip()
 
+                print(f"[DEBUG] User feedback retrieved (Agent 4): '{user_feedback}' (skip={skip_requested})")
+
                 if skip_requested:
+                    skip_accepted_agent4 = True
                     retry_decision = {"needs_retry": False, "reason": "사용자가 건너뛰기를 선택"}
                     reset_feedback_state(job_id)
+                    print(f"[DEBUG] HITL skip acknowledged for Agent 4 (job {job_id})")
                 elif user_feedback:
                     retry_decision = {"needs_retry": False, "reason": "사용자 피드백 반영"}
                     reset_feedback_state(job_id)
@@ -882,6 +917,9 @@ async def process_review(job_id: int, ws_job_key: str | None = None, send_final_
                     retry_decision = quality_check
 
                 print(f"[DEBUG] Retry decision for Agent 4: {retry_decision}")
+
+                if skip_accepted_agent4:
+                    break
 
                 if retry_decision.get("needs_retry") and hitl_retry_counts[agent_num] < MAX_HITL_RETRIES:
                     hitl_retry_counts[agent_num] += 1
@@ -936,7 +974,16 @@ async def process_review(job_id: int, ws_job_key: str | None = None, send_final_
                     break
 
             if ws:
-                await ws.send_json({"status": "processing", "agent": "ROI_Estimator", "message": "피드백 반영하여 분석 계속 진행..."})
+                next_message = (
+                    "사용자 건너뛰기 요청을 수락했습니다. 다음 단계로 진행합니다."
+                    if skip_accepted_agent4
+                    else "피드백 반영하여 분석 계속 진행..."
+                )
+                await ws.send_json({
+                    "status": "processing",
+                    "agent": "ROI_Estimator",
+                    "message": next_message
+                })
             await asyncio.sleep(1)
 
         # Agent 5: ROI Estimator
@@ -964,6 +1011,7 @@ async def process_review(job_id: int, ws_job_key: str | None = None, send_final_
         # HITL 인터럽트: Agent 5 이후 (설정에 따라)
         if 5 in hitl_stages:
             agent_num = 5
+            skip_accepted_agent5 = False
             while True:
                 quality_check = await asyncio.to_thread(
                     analyze_result_quality,
@@ -999,9 +1047,13 @@ async def process_review(job_id: int, ws_job_key: str | None = None, send_final_
                 skip_requested = updated_job.get("feedback_skip", False)
                 user_feedback = (updated_job.get("feedback") or "").strip()
 
+                print(f"[DEBUG] User feedback retrieved (Agent 5): '{user_feedback}' (skip={skip_requested})")
+
                 if skip_requested:
+                    skip_accepted_agent5 = True
                     retry_decision = {"needs_retry": False, "reason": "사용자가 건너뛰기를 선택"}
                     reset_feedback_state(job_id)
+                    print(f"[DEBUG] HITL skip acknowledged for Agent 5 (job {job_id})")
                 elif user_feedback:
                     retry_decision = {"needs_retry": False, "reason": "사용자 피드백 반영"}
                     reset_feedback_state(job_id)
@@ -1009,6 +1061,9 @@ async def process_review(job_id: int, ws_job_key: str | None = None, send_final_
                     retry_decision = quality_check
 
                 print(f"[DEBUG] Retry decision for Agent 5: {retry_decision}")
+
+                if skip_accepted_agent5:
+                    break
 
                 if retry_decision.get("needs_retry") and hitl_retry_counts[agent_num] < MAX_HITL_RETRIES:
                     hitl_retry_counts[agent_num] += 1
@@ -1062,7 +1117,16 @@ async def process_review(job_id: int, ws_job_key: str | None = None, send_final_
                     break
 
             if ws:
-                await ws.send_json({"status": "processing", "agent": "Final_Generator", "message": "피드백 반영하여 최종 보고서 생성 중..."})
+                next_message = (
+                    "사용자 건너뛰기 요청을 수락했습니다. 다음 단계로 진행합니다."
+                    if skip_accepted_agent5
+                    else "피드백 반영하여 최종 보고서 생성 중..."
+                )
+                await ws.send_json({
+                    "status": "processing",
+                    "agent": "Final_Generator",
+                    "message": next_message
+                })
             await asyncio.sleep(1)
 
         # Agent 6: Final Generator
@@ -1103,6 +1167,7 @@ ROI 추정:
         # HITL 인터럽트: Agent 6 이후 (설정에 따라)
         if 6 in hitl_stages:
             agent_num = 6
+            skip_accepted_agent6 = False
             while True:
                 quality_check = await asyncio.to_thread(
                     analyze_result_quality,
@@ -1138,9 +1203,13 @@ ROI 추정:
                 skip_requested = updated_job.get("feedback_skip", False)
                 user_feedback = (updated_job.get("feedback") or "").strip()
 
+                print(f"[DEBUG] User feedback retrieved (Agent 6): '{user_feedback}' (skip={skip_requested})")
+
                 if skip_requested:
+                    skip_accepted_agent6 = True
                     retry_decision = {"needs_retry": False, "reason": "사용자가 건너뛰기를 선택"}
                     reset_feedback_state(job_id)
+                    print(f"[DEBUG] HITL skip acknowledged for Agent 6 (job {job_id})")
                 elif user_feedback:
                     retry_decision = {"needs_retry": False, "reason": "사용자 피드백 반영"}
                     reset_feedback_state(job_id)
@@ -1148,6 +1217,9 @@ ROI 추정:
                     retry_decision = quality_check
 
                 print(f"[DEBUG] Retry decision for Agent 6: {retry_decision}")
+
+                if skip_accepted_agent6:
+                    break
 
                 if retry_decision.get("needs_retry") and hitl_retry_counts[agent_num] < MAX_HITL_RETRIES:
                     hitl_retry_counts[agent_num] += 1
@@ -1214,7 +1286,12 @@ ROI 추정:
                     break
 
             if ws:
-                await ws.send_json({"status": "processing", "message": "피드백 반영하여 최종 보고서 생성 중..."})
+                next_message = (
+                    "사용자 건너뛰기 요청을 수락했습니다. 최종 보고서를 생성합니다."
+                    if skip_accepted_agent6
+                    else "피드백 반영하여 최종 보고서 생성 중..."
+                )
+                await ws.send_json({"status": "processing", "message": next_message})
             await asyncio.sleep(1)
 
         # 최종 완료
