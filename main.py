@@ -608,7 +608,7 @@ async def process_confluence_pages_sequentially(job_ids: list, page_list: list):
                 "message": f"✅ 페이지 {idx+1}/{len(job_ids)} 완료: {page_info['title']}"
             })
 
-        print(f"\n✅ Completed page {idx+1}/{len(job_ids)}: {page_info['title']}\n")
+        print(f"\n[OK] Completed page {idx+1}/{len(job_ids)}: {page_info['title']}\n")
 
     # 모든 페이지 처리 완료 후 통합 리포트 생성
     print(f"\n{'='*80}")
