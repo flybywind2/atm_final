@@ -314,7 +314,7 @@ ROI 추정:
                 <span class="accordion-icon">▼</span>
             </div>
             <div id="section2" class="accordion-content">
-                <p>{objective_review.replace(chr(10), '<br>')}</p>
+                <div class="markdown-content" data-markdown>{objective_review}</div>
             </div>
         </div>
 
@@ -324,7 +324,7 @@ ROI 추정:
                 <span class="accordion-icon">▼</span>
             </div>
             <div id="section3" class="accordion-content">
-                <p>{data_analysis.replace(chr(10), '<br>')}</p>
+                <div class="markdown-content" data-markdown>{data_analysis}</div>
             </div>
         </div>
 
@@ -334,7 +334,7 @@ ROI 추정:
                 <span class="accordion-icon">▼</span>
             </div>
             <div id="section4" class="accordion-content">
-                <p>{risk_analysis.replace(chr(10), '<br>')}</p>
+                <div class="markdown-content" data-markdown>{risk_analysis}</div>
             </div>
         </div>
 
@@ -344,7 +344,7 @@ ROI 추정:
                 <span class="accordion-icon">▼</span>
             </div>
             <div id="section5" class="accordion-content">
-                <p>{roi_estimation.replace(chr(10), '<br>')}</p>
+                <div class="markdown-content" data-markdown>{roi_estimation}</div>
             </div>
         </div>
 
@@ -354,7 +354,7 @@ ROI 추정:
                 <span class="accordion-icon">▼</span>
             </div>
             <div id="section6" class="accordion-content" style="display: block;">
-                <p>{final_recommendation.replace(chr(10), '<br>')}</p>
+                <div class="markdown-content" data-markdown>{final_recommendation}</div>
                 <div style="margin-top: 15px; text-align: right;">
                     <button onclick="window.location.href='/api/export/final-recommendation/{job_id}'"
                             style="background-color: #007bff; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-size: 14px;">

@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI 과제 지원서 검토 시스템</title>
     <link rel="stylesheet" href="/static/css/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
     <div id="app">
@@ -14,7 +15,7 @@
         </header>
 
         <!-- Floating BP Cases Panel -->
-        <div id="bp-cases-floating">
+        <div id="bp-cases-floating" class="resizable-panel">
             <div id="bp-cases-floating-header">
                 <span>📚 검색된 BP 사례</span>
                 <div id="bp-cases-floating-controls">
@@ -218,5 +219,6 @@
     </div>
 
     <script type="module" src="/static/js/app.js"></script>
+    <script type="module" src="/static/js/resizable.js"></script>
 </body>
 </html>

@@ -3,6 +3,28 @@ let currentJobId = null;
 let wsConnection = null;
 let activeFeedbackJobId = null;
 
+if (window.marked && typeof window.marked.setOptions === 'function') {
+    window.marked.setOptions({
+        breaks: true,
+        gfm: true,
+        mangle: false,
+        headerIds: false,
+    });
+}
+
+function renderMarkdown(text) {
+    if (!text) return '';
+    if (window.marked) {
+        if (typeof window.marked.parse === 'function') {
+            return window.marked.parse(text);
+        }
+        if (typeof window.marked === 'function') {
+            return window.marked(text);
+        }
+    }
+    return String(text).replace(/\n/g, '<br>');
+}
+
 const AGENT_STATUS_IDS = [
     'agent-1-status',
     'agent-2-status',
@@ -478,7 +500,7 @@ function showHITLSection(results) {
         html = `
             <h3>🎯 목표 적합성 검토 결과</h3>
             <div style="background: #f5f5f5; padding: 15px; border-radius: 8px; margin: 10px 0;">
-                <p style="white-space: pre-wrap;">${results.objective_review}</p>
+                <div class="markdown-body">${renderMarkdown(results.objective_review)}</div>
             </div>
             <p style="color: #666; font-size: 0.9em; margin-top: 10px;">
                 ℹ️ Agent 2 (Objective Reviewer)의 분석이 완료되었습니다.
@@ -490,7 +512,7 @@ function showHITLSection(results) {
         html = `
             <h3>📊 데이터 분석 결과</h3>
             <div style="background: #e7f3ff; padding: 15px; border-radius: 8px; margin: 10px 0;">
-                <p style="white-space: pre-wrap;">${results.data_analysis}</p>
+                <div class="markdown-body">${renderMarkdown(results.data_analysis)}</div>
             </div>
             <p style="color: #666; font-size: 0.9em; margin-top: 10px;">
                 ℹ️ Agent 3 (Data Analyzer)의 분석이 완료되었습니다.
@@ -502,7 +524,7 @@ function showHITLSection(results) {
         html = `
             <h3>⚠️ 리스크 분석 결과</h3>
             <div style="background: #fff3cd; padding: 15px; border-radius: 8px; margin: 10px 0;">
-                <p style="white-space: pre-wrap;">${results.risk_analysis}</p>
+                <div class="markdown-body">${renderMarkdown(results.risk_analysis)}</div>
             </div>
             <p style="color: #666; font-size: 0.9em; margin-top: 10px;">
                 ℹ️ Agent 4 (Risk Analyzer)의 분석이 완료되었습니다.
@@ -514,7 +536,7 @@ function showHITLSection(results) {
         html = `
             <h3>💰 ROI 추정 결과</h3>
             <div style="background: #d4edda; padding: 15px; border-radius: 8px; margin: 10px 0;">
-                <p style="white-space: pre-wrap;">${results.roi_estimation}</p>
+                <div class="markdown-body">${renderMarkdown(results.roi_estimation)}</div>
             </div>
             <p style="color: #666; font-size: 0.9em; margin-top: 10px;">
                 ℹ️ Agent 5 (ROI Estimator)의 분석이 완료되었습니다.
@@ -526,7 +548,7 @@ function showHITLSection(results) {
         html = `
             <h3>📋 최종 의견</h3>
             <div style="background: #e8f4f8; padding: 15px; border-radius: 8px; margin: 10px 0;">
-                <p style="white-space: pre-wrap;">${results.final_recommendation}</p>
+                <div class="markdown-body">${renderMarkdown(results.final_recommendation)}</div>
             </div>
             <p style="color: #666; font-size: 0.9em; margin-top: 10px;">
                 ℹ️ Agent 6 (Final Generator)의 최종 의견이 완료되었습니다.
@@ -617,7 +639,16 @@ function showFinalResults(report, decision = null, decisionReason = null, decisi
         headerHtml += '</div>';
     }
 
-    document.getElementById('final-report').innerHTML = `${headerHtml}${report}`;
+    const isHTML = /<[a-z][\s\S]*>/i.test(report);
+    const bodyHtml = isHTML ? report : `<div class="markdown-body">${renderMarkdown(report)}</div>`;
+    document.getElementById('final-report').innerHTML = `${headerHtml}${bodyHtml}`;
+
+    // data-markdown 속성을 가진 요소들을 마크다운으로 렌더링
+    document.querySelectorAll('[data-markdown]').forEach(element => {
+        const markdownText = element.textContent;
+        element.innerHTML = renderMarkdown(markdownText);
+        element.classList.add('markdown-body');
+    });
 }
 
 // Accordion 토글 함수

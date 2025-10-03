@@ -185,6 +185,44 @@ textarea.input-field {
     color: #004085;
 }
 
+.markdown-body {
+    line-height: 1.6;
+    color: #2c3e50;
+    font-size: 0.95rem;
+}
+
+.markdown-body p {
+    margin: 0 0 12px;
+}
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4 {
+    margin: 18px 0 10px;
+    font-weight: 600;
+    color: #1f2d3d;
+}
+
+.markdown-body ul,
+.markdown-body ol {
+    margin: 8px 0 16px 20px;
+}
+
+.markdown-body blockquote {
+    margin: 10px 0;
+    padding-left: 12px;
+    border-left: 4px solid #dfe2e5;
+    color: #555;
+}
+
+.markdown-body code {
+    background: #f1f3f5;
+    padding: 2px 4px;
+    border-radius: 4px;
+    font-size: 0.9em;
+}
+
 footer {
     background: white;
     padding: 20px;
@@ -284,6 +322,8 @@ footer {
     top: 100px;
     right: 20px;
     width: 400px;
+    min-width: 260px;
+    max-width: 600px;
     max-height: 70vh;
     background: white;
     border-radius: 10px;
@@ -296,6 +336,9 @@ footer {
 #bp-cases-floating.collapsed {
     height: auto;
     max-height: none;
+}
+#bp-cases-floating.collapsed .bp-resize-handle {
+    display: none;
 }
 
 #bp-cases-floating-header {
@@ -357,6 +400,24 @@ footer {
 #bp-cases-floating-content::-webkit-scrollbar-thumb {
     background: #888;
     border-radius: 10px;
+}
+
+.bp-resize-handle {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 6px;
+    cursor: col-resize;
+    background: rgba(76, 175, 80, 0.12);
+    border-radius: 10px 0 0 10px;
+    transition: background 0.2s ease;
+    z-index: 1001;
+}
+
+.bp-resize-handle:hover,
+body.resizing .bp-resize-handle {
+    background: rgba(76, 175, 80, 0.28);
 }
 
 #bp-cases-floating-content::-webkit-scrollbar-thumb:hover {
