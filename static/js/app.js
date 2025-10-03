@@ -162,10 +162,14 @@ document.getElementById('submit-btn').addEventListener('click', async () => {
     const hitlStages = Array.from(document.querySelectorAll('input[name="hitl-stage"]:checked'))
         .map(checkbox => parseInt(checkbox.value));
 
+    // Sequential Thinking 활성화 여부
+    const enableSequentialThinking = document.getElementById('enable-sequential-thinking').checked;
+
     let formData = new FormData();
     formData.append('domain', domain);
     formData.append('division', division);
     formData.append('hitl_stages', JSON.stringify(hitlStages));
+    formData.append('enable_sequential_thinking', enableSequentialThinking.toString());
 
     let apiEndpoint = '/api/v1/review/submit';
 
@@ -318,7 +322,8 @@ function updateAgentStatus(agent, status) {
         'Data_Analyzer': 'agent-3-status',
         'Risk_Analyzer': 'agent-4-status',
         'ROI_Estimator': 'agent-5-status',
-        'Final_Generator': 'agent-6-status'
+        'Final_Generator': 'agent-6-status',
+        'Proposal_Improver': 'agent-7-status'
     };
 
     const elementId = agentMap[agent];
@@ -437,15 +442,20 @@ function showBPCases(bpCases) {
 
     let html = '';
     bpCases.forEach((bpCase, index) => {
+        const titleHtml = bpCase.link
+            ? `<h4>${index + 1}. <a href="${bpCase.link}" target="_blank" style="color: #007bff; text-decoration: none;">${bpCase.title} 🔗</a></h4>`
+            : `<h4>${index + 1}. ${bpCase.title}</h4>`;
+
         html += `
             <div class="bp-case-item">
-                <h4>${index + 1}. ${bpCase.title}</h4>
+                ${titleHtml}
                 <div class="bp-field"><strong>기술 유형:</strong> ${bpCase.tech_type}</div>
                 <div class="bp-field"><strong>도메인:</strong> ${bpCase.business_domain} | <strong>사업부:</strong> ${bpCase.division}</div>
-                <div class="bp-field"><strong>문제 (AS-WAS):</strong> ${bpCase.problem_as_was}</div>
+                <div class="bp-field"><strong>문제 (AS-IS):</strong> ${bpCase.problem_as_was}</div>
                 <div class="bp-field"><strong>솔루션 (TO-BE):</strong> ${bpCase.solution_to_be}</div>
                 <div class="bp-field bp-summary"><strong>💎 핵심 요약:</strong> ${bpCase.summary}</div>
                 ${bpCase.tips ? `<div class="bp-field bp-tips"><strong>💡 팁:</strong> ${bpCase.tips}</div>` : ''}
+                ${bpCase.link ? `<div class="bp-field" style="margin-top: 8px;"><a href="${bpCase.link}" target="_blank" style="color: #007bff; text-decoration: none; font-size: 0.9em;">📄 원본 문서 보기 →</a></div>` : ''}
             </div>
         `;
     });
@@ -609,11 +619,6 @@ function showFinalResults(report, decision = null, decisionReason = null, decisi
 
     document.getElementById('final-report').innerHTML = `${headerHtml}${report}`;
 }
-
-// PDF 다운로드
-document.getElementById('download-pdf-btn').addEventListener('click', async () => {
-    window.location.href = `/api/v1/review/pdf/${currentJobId}`;
-});
 
 // Accordion 토글 함수
 function toggleAccordion(sectionId) {

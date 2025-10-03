@@ -272,6 +272,16 @@ function renderDetail({ suppressNotification = false, openModal: open = false } 
     detailInputs.hitl.value = (job.metadata?.hitl_stages || []).join(', ');
     detailInputs.content.value = job.proposal_content || '';
 
+    // Confluence 링크 표시
+    const confluenceLinkSection = document.getElementById('confluence-link-section');
+    const confluencePageLink = document.getElementById('confluence-page-link');
+    if (job.confluence_page_url) {
+        confluencePageLink.href = job.confluence_page_url;
+        confluenceLinkSection.style.display = 'block';
+    } else {
+        confluenceLinkSection.style.display = 'none';
+    }
+
     renderAgentResults(job.metadata?.agent_results || {});
     detailMetadata.textContent = JSON.stringify(job.metadata || {}, null, 2);
 

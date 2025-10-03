@@ -81,10 +81,6 @@ def get_pages_recursively(page_id: str, include_current: bool = True, max_depth:
     """페이지와 하위 페이지를 재귀적으로 가져오기"""
     print(f"[DEBUG] get_pages_recursively called: page_id={page_id}, current_depth={current_depth}, max_depth={max_depth}, include_current={include_current}")
 
-    if current_depth >= max_depth:
-        print(f"[DEBUG] Max depth reached, returning empty list")
-        return []
-
     pages = []
 
     # 현재 페이지 포함
@@ -97,19 +93,22 @@ def get_pages_recursively(page_id: str, include_current: bool = True, max_depth:
         else:
             print(f"[DEBUG] Current page is None")
 
-    # 하위 페이지 가져오기
-    print(f"[DEBUG] Fetching child pages for: {page_id}")
-    child_pages = get_child_pages(page_id)
-    print(f"[DEBUG] Found {len(child_pages)} child pages")
+    # 하위 페이지 가져오기 (max_depth 체크는 재귀 호출 전에)
+    if current_depth < max_depth:
+        print(f"[DEBUG] Fetching child pages for: {page_id}")
+        child_pages = get_child_pages(page_id)
+        print(f"[DEBUG] Found {len(child_pages)} child pages")
 
-    for child in child_pages:
-        child_id = child.get("id")
-        child_title = child.get("title")
-        print(f"[DEBUG] Processing child: {child_title} (ID: {child_id})")
-        # 재귀적으로 하위 페이지의 내용과 그 하위 페이지들 가져오기
-        sub_pages = get_pages_recursively(child_id, include_current=True, max_depth=max_depth, current_depth=current_depth + 1)
-        print(f"[DEBUG] Got {len(sub_pages)} pages from child {child_title}")
-        pages.extend(sub_pages)
+        for child in child_pages:
+            child_id = child.get("id")
+            child_title = child.get("title")
+            print(f"[DEBUG] Processing child: {child_title} (ID: {child_id})")
+            # 재귀적으로 하위 페이지의 내용과 그 하위 페이지들 가져오기
+            sub_pages = get_pages_recursively(child_id, include_current=True, max_depth=max_depth, current_depth=current_depth + 1)
+            print(f"[DEBUG] Got {len(sub_pages)} pages from child {child_title}")
+            pages.extend(sub_pages)
+    else:
+        print(f"[DEBUG] Max depth reached, skipping child page fetch")
 
     print(f"[DEBUG] Returning {len(pages)} total pages from page_id={page_id}")
     return pages

@@ -41,6 +41,15 @@ def init_database():
     if "title" not in existing_columns:
         cursor.execute("ALTER TABLE review_jobs ADD COLUMN title TEXT")
 
+    if "confluence_page_id" not in existing_columns:
+        cursor.execute("ALTER TABLE review_jobs ADD COLUMN confluence_page_id TEXT")
+
+    if "confluence_page_url" not in existing_columns:
+        cursor.execute("ALTER TABLE review_jobs ADD COLUMN confluence_page_url TEXT")
+
+    if "enable_sequential_thinking" not in existing_columns:
+        cursor.execute("ALTER TABLE review_jobs ADD COLUMN enable_sequential_thinking INTEGER DEFAULT 0")
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS hitl_feedback (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -85,6 +94,9 @@ def create_job(
     human_decision: str = "pending",
     llm_decision: str = "pending",
     metadata: dict | None = None,
+    confluence_page_id: str | None = None,
+    confluence_page_url: str | None = None,
+    enable_sequential_thinking: bool = False,
 ):
     """새 검토 작업 생성"""
     conn = sqlite3.connect(DB_PATH)
@@ -96,8 +108,8 @@ def create_job(
 
     cursor.execute(
         """
-        INSERT INTO review_jobs (status, decision, llm_decision, title, proposal_content, domain, division, metadata)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO review_jobs (status, decision, llm_decision, title, proposal_content, domain, division, metadata, confluence_page_id, confluence_page_url, enable_sequential_thinking)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             status,
@@ -108,6 +120,9 @@ def create_job(
             domain,
             division,
             json.dumps(metadata_payload),
+            confluence_page_id,
+            confluence_page_url,
+            1 if enable_sequential_thinking else 0,
         ),
     )
 
@@ -129,6 +144,9 @@ def _row_to_job_dict(row):
         metadata_json,
         created_at,
         updated_at,
+        confluence_page_id,
+        confluence_page_url,
+        enable_sequential_thinking,
     ) = row
 
     metadata = json.loads(metadata_json) if metadata_json else {}
@@ -152,6 +170,9 @@ def _row_to_job_dict(row):
         "report": metadata.get("report"),
         "created_at": created_at,
         "updated_at": updated_at,
+        "confluence_page_id": confluence_page_id,
+        "confluence_page_url": confluence_page_url,
+        "enable_sequential_thinking": bool(enable_sequential_thinking),
     }
 
 
@@ -162,7 +183,7 @@ def get_job(job_id: int):
 
     cursor.execute(
         """
-        SELECT id, status, decision, llm_decision, title, proposal_content, domain, division, metadata, created_at, updated_at
+        SELECT id, status, decision, llm_decision, title, proposal_content, domain, division, metadata, created_at, updated_at, confluence_page_id, confluence_page_url, enable_sequential_thinking
         FROM review_jobs WHERE id = ?
         """,
         (job_id,),
@@ -189,7 +210,7 @@ def list_jobs(
     cursor = conn.cursor()
 
     query = [
-        "SELECT id, status, decision, llm_decision, title, proposal_content, domain, division, metadata, created_at, updated_at",
+        "SELECT id, status, decision, llm_decision, title, proposal_content, domain, division, metadata, created_at, updated_at, confluence_page_id, confluence_page_url, enable_sequential_thinking",
         "FROM review_jobs",
         "WHERE 1 = 1",
     ]
