@@ -79,6 +79,7 @@ body.modal-open {
     border-bottom: 1px solid #eceff4;
     text-align: left;
     vertical-align: top;
+    white-space: nowrap;
 }
 
 .jobs-table tbody tr:hover {
@@ -88,7 +89,7 @@ body.modal-open {
 .jobs-table .action-buttons {
     display: flex;
     gap: 6px;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
 }
 
 .info-badge {
