@@ -84,78 +84,107 @@ def call_llm(prompt: str, enable_sequential_thinking: bool = False, use_context7
             # Internal LLM 사용 (tool calling 지원)
             if enable_sequential_thinking or use_context7:
                 # Tool calling 활성화
-                from langchain_core.tools import tool
+                import json
+                from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 
-                @tool
-                def sequential_thinking(
-                    thought: str,
-                    next_thought_needed: bool,
-                    thought_number: int,
-                    total_thoughts: int,
-                    is_revision: bool = False,
-                    revises_thought: int = None,
-                    branch_from_thought: int = None,
-                    branch_id: str = None,
-                    needs_more_thoughts: bool = False
-                ) -> str:
-                    """Sequential Thinking tool for step-by-step reasoning.
-
-                    This tool helps analyze problems through a flexible thinking process.
-                    Each thought can build on, question, or revise previous insights.
-
-                    Args:
-                        thought: Current thinking step
-                        next_thought_needed: Whether another thought step is needed
-                        thought_number: Current thought number (starts at 1)
-                        total_thoughts: Estimated total thoughts needed
-                        is_revision: Whether this revises previous thinking
-                        revises_thought: Which thought number is being reconsidered
-                        branch_from_thought: Branching point thought number
-                        branch_id: Branch identifier
-                        needs_more_thoughts: If more thoughts are needed
-
-                    Returns:
-                        Confirmation message
-                    """
-                    print(f"[Sequential Thinking {thought_number}/{total_thoughts}] {thought[:100]}...")
-                    return f"Thought {thought_number} recorded. Continue: {next_thought_needed}"
-
-                @tool
-                def context7_search(library_name: str, topic: str = None) -> str:
-                    """Search library documentation using Context7.
-
-                    Args:
-                        library_name: Name of the library to search
-                        topic: Optional topic to focus on
-
-                    Returns:
-                        Library documentation
-                    """
-                    print(f"[Context7] Searching {library_name} for topic: {topic}")
-                    # Context7 실제 구현은 향후 추가 (현재는 placeholder)
-                    return f"Documentation for {library_name} (topic: {topic})"
+                # Sequential thinking tool definition
+                sequential_thinking_tool = {
+                    "type": "function",
+                    "function": {
+                        "name": "sequentialthinking",
+                        "description": """A detailed tool for dynamic and reflective problem-solving through thoughts.
+This tool helps analyze problems through a flexible thinking process that can adapt and evolve.
+Each thought can build on, question, or revise previous insights as understanding deepens.""",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "thought": {
+                                    "type": "string",
+                                    "description": "Your current thinking step"
+                                },
+                                "nextThoughtNeeded": {
+                                    "type": "boolean",
+                                    "description": "Whether another thought step is needed"
+                                },
+                                "thoughtNumber": {
+                                    "type": "integer",
+                                    "description": "Current thought number",
+                                    "minimum": 1
+                                },
+                                "totalThoughts": {
+                                    "type": "integer",
+                                    "description": "Estimated total thoughts needed",
+                                    "minimum": 1
+                                },
+                                "isRevision": {
+                                    "type": "boolean",
+                                    "description": "Whether this revises previous thinking"
+                                },
+                                "revisesThought": {
+                                    "type": "integer",
+                                    "description": "Which thought is being reconsidered"
+                                },
+                                "branchFromThought": {
+                                    "type": "integer",
+                                    "description": "Branching point thought number"
+                                },
+                                "branchId": {
+                                    "type": "string",
+                                    "description": "Branch identifier"
+                                },
+                                "needsMoreThoughts": {
+                                    "type": "boolean",
+                                    "description": "If more thoughts are needed"
+                                }
+                            },
+                            "required": ["thought", "nextThoughtNeeded", "thoughtNumber", "totalThoughts"]
+                        }
+                    }
+                }
 
                 tools = []
                 if enable_sequential_thinking:
-                    tools.append(sequential_thinking)
-                if use_context7:
-                    tools.append(context7_search)
+                    tools.append(sequential_thinking_tool)
 
                 # Tool binding
                 llm_with_tools = llm_client.bind_tools(tools)
                 print(f"[LLM] Tool calling enabled: sequential_thinking={enable_sequential_thinking}, context7={use_context7}")
 
-                response = llm_with_tools.invoke(prompt)
+                # Handle sequential thinking loop
+                messages = [HumanMessage(content=prompt)]
+                thoughts = []
 
-                # Tool calls 처리
-                if hasattr(response, 'tool_calls') and response.tool_calls:
-                    print(f"[LLM] Tool calls detected: {len(response.tool_calls)}")
-                    for tool_call in response.tool_calls:
-                        print(f"  - {tool_call.get('name', 'unknown')}: {str(tool_call.get('args', {}))[:100]}")
+                while True:
+                    response = llm_with_tools.invoke(messages)
 
-                # Clean response content to avoid encoding issues
-                content = response.content
-                return clean_unicode_for_cp949(content) if content else content
+                    # Tool calls 처리
+                    if hasattr(response, 'tool_calls') and response.tool_calls:
+                        print(f"[LLM] Tool calls detected: {len(response.tool_calls)}")
+
+                        for tool_call in response.tool_calls:
+                            if tool_call['name'] == 'sequentialthinking':
+                                args = tool_call['args']
+                                thoughts.append(args)
+
+                                print(f"💭 Thought {args['thoughtNumber']}/{args['totalThoughts']}: {args['thought'][:100]}...")
+
+                                # Add tool response to messages
+                                messages.append(AIMessage(content="", tool_calls=[tool_call]))
+                                messages.append(ToolMessage(
+                                    tool_call_id=tool_call['id'],
+                                    content=json.dumps({"status": "thought_recorded"})
+                                ))
+
+                                # Check if more thoughts are needed
+                                if not args.get('nextThoughtNeeded', False):
+                                    print(f"✅ Thinking complete! Total thoughts: {len(thoughts)}")
+                                    # Get final answer
+                                    final_response = llm_client.invoke(messages + [HumanMessage(content="Please provide your final answer based on the thoughts above.")])
+                                    return clean_unicode_for_cp949(final_response.content) if final_response.content else ""
+                    else:
+                        # No tool call, return response
+                        content = response.content
+                        return clean_unicode_for_cp949(content) if content else content
             else:
                 # Tool 없이 일반 호출
                 response = llm_client.invoke(prompt)

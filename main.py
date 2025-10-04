@@ -543,14 +543,28 @@ async def process_confluence_pages_sequentially(job_ids: list, page_list: list):
         # 처리 완료된 job의 최종 report 가져오기
         job_data = get_job(job_id)
         if job_data and job_data.get('report'):
-            all_reports.append({
+            page_report_data = {
                 "page_title": page_info['title'],
                 "page_id": page_info['id'],
                 "job_id": job_id,
                 "report": job_data['report'],
                 "decision": job_data.get('llm_decision'),
                 "decision_reason": (job_data.get('metadata') or {}).get('final_decision', {}).get('reason')
-            })
+            }
+            all_reports.append(page_report_data)
+
+            # UI에 페이지별 완료 결과 즉시 전송
+            if main_ws_key in active_connections:
+                await active_connections[main_ws_key].send_json({
+                    "status": "page_completed",
+                    "current_page": idx + 1,
+                    "total_pages": len(job_ids),
+                    "page_title": page_info['title'],
+                    "page_id": page_info['id'],
+                    "page_report": job_data['report'],
+                    "page_decision": job_data.get('llm_decision'),
+                    "page_decision_reason": (job_data.get('metadata') or {}).get('final_decision', {}).get('reason')
+                })
 
         # UI에 페이지 완료 알림
         if main_ws_key in active_connections:
@@ -759,22 +773,28 @@ async def process_review(job_id: int, ws_job_key: str | None = None, send_final_
 
             update_job_status(job_id, "completed", metadata=metadata)
 
-            # Send updated report via WebSocket
-            target_ws = ws or (active_connections.get(ws_key) if active_connections and ws_key else None)
-            if target_ws:
-                human_decision_value = latest_job_data.get("decision") or latest_job_data.get("human_decision")
-                decision_value = metadata.get("final_decision", {}).get("decision", "보류")
-                decision_reason = metadata.get("final_decision", {}).get("reason", "")
+            # Send updated report via WebSocket (only if send_final_report is True)
+            if send_final_report:
+                target_ws = ws or (active_connections.get(ws_key) if active_connections and ws_key else None)
+                if target_ws:
+                    human_decision_value = latest_job_data.get("decision") or latest_job_data.get("human_decision")
+                    decision_value = metadata.get("final_decision", {}).get("decision", "보류")
+                    decision_reason = metadata.get("final_decision", {}).get("reason", "")
 
-                await target_ws.send_json({
-                    "status": "completed",
-                    "agent": "Proposal_Improver",
-                    "message": "개선된 지원서 생성 완료",
-                    "report": updated_report,
-                    "decision": decision_value,
-                    "decision_reason": decision_reason,
-                    "human_decision": human_decision_value,
-                })
+                    await target_ws.send_json({
+                        "status": "completed",
+                        "agent": "Proposal_Improver",
+                        "message": "개선된 지원서 생성 완료",
+                        "report": updated_report,
+                        "decision": decision_value,
+                        "decision_reason": decision_reason,
+                        "human_decision": human_decision_value,
+                        "current_page": 1,
+                        "total_pages": 1,
+                    })
+                    print(f"[INFO] Sent final report for job {job_id}")
+            else:
+                print(f"[INFO] Skipped sending final report for job {job_id} (multi-page mode)")
 
     except Exception as e:
         print(f"!!! ERROR in review process: {e}")

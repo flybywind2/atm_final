@@ -2,6 +2,7 @@
 let currentJobId = null;
 let wsConnection = null;
 let activeFeedbackJobId = null;
+let currentPageInfo = { currentPage: 1, totalPages: 1, agentName: '', agentMessage: '' };
 
 if (window.marked && typeof window.marked.setOptions === 'function') {
     window.marked.setOptions({
@@ -248,8 +249,17 @@ document.getElementById('submit-btn').addEventListener('click', async () => {
 
         console.log('✅ 제출 완료:', result);
 
+        // currentPageInfo 초기화 (제출 시 받은 페이지 정보 사용)
+        currentPageInfo.currentPage = 1;
+        currentPageInfo.totalPages = result.page_count || 1;
+        currentPageInfo.agentName = '';
+        currentPageInfo.agentMessage = '';
+
         // 진행 상황 섹션 표시 (입력 섹션은 유지)
         document.getElementById('progress-section').style.display = 'block';
+
+        // 초기 전체 진행 상황 표시
+        updateOverallProgress(currentPageInfo.currentPage, currentPageInfo.totalPages, '', '');
 
         // Confluence 페이지 목록 표시
         if (result.pages && result.pages.length > 0) {
@@ -290,15 +300,31 @@ function connectWebSocket(jobId) {
 
         // 페이지별 진행 상황 업데이트
         if (data.type === 'page_progress') {
+            console.log('📄 Page progress event received:', {
+                current_page: data.current_page,
+                total_pages: data.total_pages,
+                status: data.status,
+                page_title: data.page_title
+            });
             updatePageProgress(data);
+            // currentPageInfo 업데이트
+            currentPageInfo.currentPage = data.current_page;
+            currentPageInfo.totalPages = data.total_pages;
+            // 전체 진행 상황도 업데이트 (단일 페이지일 때도 표시)
+            updateOverallProgress(currentPageInfo.currentPage, currentPageInfo.totalPages, currentPageInfo.agentName, currentPageInfo.agentMessage);
         }
 
         // 에이전트 상태 업데이트
         if (data.agent) {
             updateAgentStatus(data.agent, data.status);
+            // currentPageInfo에 에이전트 정보 저장
+            currentPageInfo.agentName = data.agent;
+            currentPageInfo.agentMessage = data.message || '';
             if (data.message) {
                 updateProgressMessage(data.message);
             }
+            // 에이전트 정보가 업데이트되면 전체 진행 상황도 업데이트
+            updateOverallProgress(currentPageInfo.currentPage, currentPageInfo.totalPages, currentPageInfo.agentName, currentPageInfo.agentMessage);
         }
 
         // BP 검색 결과 표시
@@ -312,6 +338,21 @@ function connectWebSocket(jobId) {
                 activeFeedbackJobId = data.job_id;
             }
             showHITLSection(data.results);
+        }
+
+       // 페이지별 완료 (중간 결과)
+        if (data.status === 'page_completed' && data.page_report) {
+            console.log('📄 Page completed event received:', {
+                current_page: data.current_page,
+                total_pages: data.total_pages,
+                page_title: data.page_title,
+                page_id: data.page_id
+            });
+            appendPageResult(data);
+            // 전체 진행 상황 업데이트
+            currentPageInfo.currentPage = data.current_page;
+            currentPageInfo.totalPages = data.total_pages;
+            updateOverallProgress(currentPageInfo.currentPage, currentPageInfo.totalPages, currentPageInfo.agentName, currentPageInfo.agentMessage);
         }
 
        // 최종 완료 (report가 있을 때만)
@@ -610,15 +651,142 @@ document.getElementById('skip-feedback-btn').addEventListener('click', async () 
     }
 });
 
+// 페이지별 결과 추가 (실시간)
+// 전체 진행 상황 업데이트
+function updateOverallProgress(currentPage, totalPages, agentName = '', agentMessage = '') {
+    // 진행 섹션과 결과 섹션 모두 확인
+    const progressSection = document.getElementById('progress-section');
+    const resultSection = document.getElementById('result-section');
+
+    // 어느 섹션이 보이는지 확인
+    const targetSection = (resultSection && resultSection.style.display !== 'none')
+        ? resultSection
+        : progressSection;
+
+    if (!targetSection) return;
+
+    // 전체 진행 상황 헤더 확인/생성
+    let overallHeader = document.getElementById('overall-progress-header');
+    if (!overallHeader) {
+        overallHeader = document.createElement('div');
+        overallHeader.id = 'overall-progress-header';
+        overallHeader.className = 'overall-progress-header';
+        targetSection.insertBefore(overallHeader, targetSection.firstChild);
+    } else {
+        // 헤더가 이미 있지만 다른 섹션에 있으면 이동
+        if (overallHeader.parentElement !== targetSection) {
+            targetSection.insertBefore(overallHeader, targetSection.firstChild);
+        }
+    }
+
+    // 진행률 계산
+    const percentage = Math.round((currentPage / totalPages) * 100);
+
+    // 에이전트 이름 매핑
+    const agentNameMap = {
+        'BP_Scouter': 'BP 사례 검색',
+        'Objective_Reviewer': '목표 적합성 검토',
+        'Data_Analyzer': '데이터 분석',
+        'Risk_Analyzer': '리스크 분석',
+        'ROI_Estimator': 'ROI 추정',
+        'Final_Generator': '최종 보고서 생성',
+        'Proposal_Improver': '개선된 지원서 작성'
+    };
+
+    const koreanAgentName = agentNameMap[agentName] || agentName;
+
+    // 2페이지 이상일 때만 에이전트 정보 표시
+    const agentInfoHtml = (totalPages > 1 && agentName) ? `
+        <div style="font-size: 0.9em; color: #fff; margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(255, 255, 255, 0.3); font-weight: 500;">
+            현재: ${koreanAgentName}${agentMessage ? ` - ${agentMessage}` : ''}
+        </div>
+    ` : '';
+
+    overallHeader.innerHTML = `
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+            <span style="font-size: 1.1em; font-weight: 600;">
+                📊 전체 진행 상황: ${currentPage} / ${totalPages} 페이지
+            </span>
+            <span style="font-size: 1em; color: #667eea; font-weight: 600;">
+                ${percentage}%
+            </span>
+        </div>
+        <div class="progress-bar-container">
+            <div class="progress-bar-fill" style="width: ${percentage}%"></div>
+        </div>
+        ${agentInfoHtml}
+    `;
+}
+
+function appendPageResult(data) {
+    console.log('📄 appendPageResult called with data:', data);
+
+    const resultSection = document.getElementById('result-section');
+    const finalReport = document.getElementById('final-report');
+
+    // 결과 섹션이 숨겨져 있으면 표시하고 초기화
+    if (resultSection.style.display === 'none') {
+        resultSection.style.display = 'block';
+        // progress section 숨기기
+        document.getElementById('progress-section').style.display = 'none';
+        finalReport.innerHTML = '<h3>📄 페이지별 검토 결과</h3>';
+    }
+
+    // 이미 같은 페이지의 결과가 있는지 확인 (중복 방지)
+    const existingPage = finalReport.querySelector(`[data-page-index="${data.current_page}"]`);
+    if (existingPage) {
+        console.log(`⚠️ Page ${data.current_page} result already exists, skipping`);
+        return;
+    }
+
+    // 페이지 결과 추가
+    // HTML인지 마크다운인지 확인
+    const isHTML = /<[a-z][\s\S]*>/i.test(data.page_report);
+    const reportContent = isHTML ? data.page_report : renderMarkdown(data.page_report);
+
+    const pageResultHtml = `
+        <div class="page-result-item" data-page-index="${data.current_page}">
+            <h4>📋 ${data.page_title || `페이지 ${data.current_page}`} <small style="color: #888;">(${data.current_page}/${data.total_pages})</small></h4>
+            <div class="page-decision">
+                <strong>판정:</strong> ${data.page_decision || '승인'}
+                ${data.page_decision_reason ? `<br><small>${data.page_decision_reason}</small>` : ''}
+            </div>
+            <div class="accordion-item">
+                <div class="accordion-header" onclick="toggleAccordion('page-${data.current_page}-content')">
+                    <span>상세 검토 내용</span>
+                    <span class="accordion-icon">▼</span>
+                </div>
+                <div id="page-${data.current_page}-content" class="accordion-content">
+                    ${isHTML ? reportContent : `<div class="markdown-body">${reportContent}</div>`}
+                </div>
+            </div>
+        </div>
+    `;
+
+    finalReport.insertAdjacentHTML('beforeend', pageResultHtml);
+    console.log(`✅ Page ${data.current_page}/${data.total_pages} result appended to DOM`);
+}
+
 // 최종 결과 표시
 function showFinalResults(report, decision = null, decisionReason = null, decisions = null) {
+    console.log('📊 showFinalResults called', { hasReport: !!report, hasDecision: !!decision, hasDecisions: !!decisions });
+
+    const resultSection = document.getElementById('result-section');
+    const finalReport = document.getElementById('final-report');
+
+    // progress section 숨기기
     document.getElementById('progress-section').style.display = 'none';
     document.getElementById('hitl-section').style.display = 'none';
-    document.getElementById('result-section').style.display = 'block';
+    resultSection.style.display = 'block';
+
+    // 기존에 페이지별 결과가 있는지 확인
+    const hasPageResults = finalReport.querySelector('.page-result-item');
+    console.log('📊 Has page results:', !!hasPageResults);
 
     let headerHtml = '';
 
     if (Array.isArray(decisions) && decisions.length > 0) {
+        // 다중 페이지인 경우 - 페이지별 판정 요약만 표시
         headerHtml += '<div class="decision-summary">';
         headerHtml += '<h3>📌 페이지별 자동 판정</h3>';
         headerHtml += '<ul>';
@@ -630,18 +798,34 @@ function showFinalResults(report, decision = null, decisionReason = null, decisi
         });
         headerHtml += '</ul>';
         headerHtml += '</div>';
+
+        if (hasPageResults) {
+            // 페이지별 결과가 이미 있으면 맨 위에 요약만 추가
+            const existingHeader = finalReport.querySelector('.decision-summary');
+            if (existingHeader) {
+                existingHeader.remove(); // 기존 헤더 제거
+            }
+            finalReport.insertAdjacentHTML('afterbegin', headerHtml);
+            console.log('✅ Added summary header to existing page results');
+        } else {
+            // 페이지별 결과가 없으면 헤더만 표시 (개별 페이지는 page_completed 이벤트로 추가됨)
+            finalReport.innerHTML = `${headerHtml}<h3>📄 페이지별 검토 결과</h3>`;
+            console.log('✅ Initialized with header (waiting for page results)');
+        }
     } else if (decision) {
+        // 단일 페이지인 경우 - 전체 리포트 표시
         headerHtml += '<div class="decision-summary-single">';
         headerHtml += `<h3>📌 자동 판정: ${decision}</h3>`;
         if (decisionReason) {
             headerHtml += `<p>${decisionReason}</p>`;
         }
         headerHtml += '</div>';
-    }
 
-    const isHTML = /<[a-z][\s\S]*>/i.test(report);
-    const bodyHtml = isHTML ? report : `<div class="markdown-body">${renderMarkdown(report)}</div>`;
-    document.getElementById('final-report').innerHTML = `${headerHtml}${bodyHtml}`;
+        const isHTML = /<[a-z][\s\S]*>/i.test(report);
+        const bodyHtml = isHTML ? report : `<div class="markdown-body">${renderMarkdown(report)}</div>`;
+        finalReport.innerHTML = `${headerHtml}${bodyHtml}`;
+        console.log('✅ Displayed single page result');
+    }
 
     // data-markdown 속성을 가진 요소들을 마크다운으로 렌더링
     document.querySelectorAll('[data-markdown]').forEach(element => {
