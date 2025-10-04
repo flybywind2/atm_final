@@ -87,6 +87,7 @@ async def dashboard_list(
     status: Optional[str] = None,
     decision: Optional[str] = None,
     llm_decision: Optional[str] = None,
+    input_method: Optional[str] = None,
     search: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
@@ -102,11 +103,12 @@ async def dashboard_list(
         status=status,
         decision=decision,
         llm_decision=llm_decision,
+        input_method=input_method,
         search=search,
         order=order,
     )
 
-    total = _count_jobs_func(status=status, decision=decision, llm_decision=llm_decision, search=search)
+    total = _count_jobs_func(status=status, decision=decision, llm_decision=llm_decision, input_method=input_method, search=search)
 
     formatted_jobs = []
     for job in jobs:

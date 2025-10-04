@@ -57,6 +57,15 @@
                                 <option value="보류">보류</option>
                             </select>
                         </label>
+                        <label>
+                            입력 방식
+                            <select id="filter-input-method" class="input-field">
+                                <option value="">전체</option>
+                                <option value="file">파일 업로드</option>
+                                <option value="text">직접 작성</option>
+                                <option value="confluence">Confluence</option>
+                            </select>
+                        </label>
                         <label class="search-field">
                             검색어
                             <input type="text" id="filter-search" class="input-field" placeholder="제목 또는 내용 검색" />
@@ -179,6 +188,10 @@
                     <label>
                         사업부
                         <input type="text" id="detail-division" class="input-field" />
+                    </label>
+                    <label>
+                        입력 방식
+                        <input type="text" id="detail-input-method" class="input-field" readonly />
                     </label>
                     <label>
                         상태

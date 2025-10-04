@@ -5,6 +5,12 @@ import json
 import asyncio
 from typing import Callable, Dict
 from fastapi import WebSocket
+import sys
+import os
+
+# utils 모듈 import를 위한 경로 추가
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from utils.file_parser import extract_text_from_file
 
 router = APIRouter(prefix="/api/v1/review", tags=["review"])
 
@@ -57,12 +63,8 @@ async def submit_proposal(
     if file:
         # 파일 업로드 방식
         contents = await file.read()
-        # MVP: 간단한 텍스트 추출
-        if file.filename.endswith(('.txt', '.md')):
-            proposal_content = contents.decode('utf-8', errors='ignore')
-        else:
-            # PDF/DOCX는 추후 고도화
-            proposal_content = contents.decode('utf-8', errors='ignore')
+        # 파일 파서를 사용하여 텍스트 추출
+        proposal_content = extract_text_from_file(contents, file.filename)
     elif text:
         # 텍스트 직접 입력 방식
         proposal_content = text
@@ -87,6 +89,9 @@ async def submit_proposal(
     # 제목 자동 생성 (LLM)
     generated_title = await _generate_job_title_func(proposal_content, fallback=f"{domain} 제안서")
 
+    # 입력 방식 결정
+    input_method = "file" if file else "text"
+
     # DB에 저장하고 job_id 생성
     job_id = _create_job_func(
         proposal_content,
@@ -95,6 +100,7 @@ async def submit_proposal(
         title=generated_title,
         hitl_stages=hitl_stages_list,
         enable_sequential_thinking=enable_seq_thinking,
+        input_method=input_method,
     )
 
     # 백그라운드에서 검토 프로세스 시작

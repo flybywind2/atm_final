@@ -50,6 +50,9 @@ def init_database():
     if "enable_sequential_thinking" not in existing_columns:
         cursor.execute("ALTER TABLE review_jobs ADD COLUMN enable_sequential_thinking INTEGER DEFAULT 0")
 
+    if "input_method" not in existing_columns:
+        cursor.execute("ALTER TABLE review_jobs ADD COLUMN input_method TEXT DEFAULT 'text'")
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS hitl_feedback (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -97,6 +100,7 @@ def create_job(
     confluence_page_id: str | None = None,
     confluence_page_url: str | None = None,
     enable_sequential_thinking: bool = False,
+    input_method: str = "text",
 ):
     """새 검토 작업 생성"""
     conn = sqlite3.connect(DB_PATH)
@@ -108,8 +112,8 @@ def create_job(
 
     cursor.execute(
         """
-        INSERT INTO review_jobs (status, decision, llm_decision, title, proposal_content, domain, division, metadata, confluence_page_id, confluence_page_url, enable_sequential_thinking)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO review_jobs (status, decision, llm_decision, title, proposal_content, domain, division, metadata, confluence_page_id, confluence_page_url, enable_sequential_thinking, input_method)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             status,
@@ -123,6 +127,7 @@ def create_job(
             confluence_page_id,
             confluence_page_url,
             1 if enable_sequential_thinking else 0,
+            input_method,
         ),
     )
 
@@ -147,6 +152,7 @@ def _row_to_job_dict(row):
         confluence_page_id,
         confluence_page_url,
         enable_sequential_thinking,
+        input_method,
     ) = row
 
     metadata = json.loads(metadata_json) if metadata_json else {}
@@ -173,6 +179,7 @@ def _row_to_job_dict(row):
         "confluence_page_id": confluence_page_id,
         "confluence_page_url": confluence_page_url,
         "enable_sequential_thinking": bool(enable_sequential_thinking),
+        "input_method": input_method or "text",
     }
 
 
@@ -183,7 +190,7 @@ def get_job(job_id: int):
 
     cursor.execute(
         """
-        SELECT id, status, decision, llm_decision, title, proposal_content, domain, division, metadata, created_at, updated_at, confluence_page_id, confluence_page_url, enable_sequential_thinking
+        SELECT id, status, decision, llm_decision, title, proposal_content, domain, division, metadata, created_at, updated_at, confluence_page_id, confluence_page_url, enable_sequential_thinking, input_method
         FROM review_jobs WHERE id = ?
         """,
         (job_id,),
@@ -202,6 +209,7 @@ def list_jobs(
     status: str | None = None,
     decision: str | None = None,
     llm_decision: str | None = None,
+    input_method: str | None = None,
     search: str | None = None,
     order: str = "desc",
 ):
@@ -210,7 +218,7 @@ def list_jobs(
     cursor = conn.cursor()
 
     query = [
-        "SELECT id, status, decision, llm_decision, title, proposal_content, domain, division, metadata, created_at, updated_at, confluence_page_id, confluence_page_url, enable_sequential_thinking",
+        "SELECT id, status, decision, llm_decision, title, proposal_content, domain, division, metadata, created_at, updated_at, confluence_page_id, confluence_page_url, enable_sequential_thinking, input_method",
         "FROM review_jobs",
         "WHERE 1 = 1",
     ]
@@ -227,6 +235,10 @@ def list_jobs(
     if llm_decision:
         query.append("AND llm_decision = ?")
         params.append(llm_decision)
+
+    if input_method:
+        query.append("AND input_method = ?")
+        params.append(input_method)
 
     if search:
         query.append("AND (proposal_content LIKE ? OR COALESCE(title, '') LIKE ?)")
@@ -250,6 +262,7 @@ def count_jobs(
     status: str | None = None,
     decision: str | None = None,
     llm_decision: str | None = None,
+    input_method: str | None = None,
     search: str | None = None,
 ):
     """필터에 따른 총 개수"""
@@ -270,6 +283,10 @@ def count_jobs(
     if llm_decision:
         query.append("AND llm_decision = ?")
         params.append(llm_decision)
+
+    if input_method:
+        query.append("AND input_method = ?")
+        params.append(input_method)
 
     if search:
         query.append("AND (proposal_content LIKE ? OR COALESCE(title, '') LIKE ?)")

@@ -184,6 +184,7 @@ async def submit_confluence_for_review(
                 confluence_page_id=page.get('id'),
                 confluence_page_url=confluence_url,
                 enable_sequential_thinking=enable_seq_thinking,
+                input_method="confluence",
             )
             page_list[idx]["title"] = job_title
             job_ids.append(job_id)

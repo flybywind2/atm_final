@@ -8,6 +8,7 @@ const state = {
         status: '',
         humanDecision: '',
         llmDecision: '',
+        inputMethod: '',
         search: ''
     },
     selectedJob: null
@@ -19,6 +20,7 @@ const resetFiltersBtn = document.getElementById('reset-filters');
 const filterStatus = document.getElementById('filter-status');
 const filterHumanDecision = document.getElementById('filter-decision');
 const filterLLMDecision = document.getElementById('filter-llm-decision');
+const filterInputMethod = document.getElementById('filter-input-method');
 const filterSearch = document.getElementById('filter-search');
 const filterLimit = document.getElementById('filter-limit');
 
@@ -50,6 +52,7 @@ const detailInputs = {
     title: document.getElementById('detail-title'),
     domain: document.getElementById('detail-domain'),
     division: document.getElementById('detail-division'),
+    inputMethod: document.getElementById('detail-input-method'),
     status: document.getElementById('detail-status'),
     humanDecision: document.getElementById('detail-human-decision'),
     llmDecision: document.getElementById('detail-llm-decision'),
@@ -109,6 +112,7 @@ async function fetchJobs() {
     if (state.filters.status) params.set('status', state.filters.status);
     if (state.filters.humanDecision) params.set('decision', state.filters.humanDecision);
     if (state.filters.llmDecision) params.set('llm_decision', state.filters.llmDecision);
+    if (state.filters.inputMethod) params.set('input_method', state.filters.inputMethod);
     if (state.filters.search) params.set('search', state.filters.search);
 
     try {
@@ -265,6 +269,7 @@ function renderDetail({ suppressNotification = false, openModal: open = false } 
     detailInputs.title.value = job.title || '';
     detailInputs.domain.value = job.domain || '';
     detailInputs.division.value = job.division || '';
+    detailInputs.inputMethod.value = job.input_method || 'text';
     detailInputs.status.value = job.status || 'pending';
     detailInputs.humanDecision.value = job.human_decision || job.decision || 'pending';
     detailInputs.llmDecision.value = job.llm_decision || 'pending';
@@ -365,6 +370,7 @@ filterForm.addEventListener('submit', (event) => {
     state.filters.status = filterStatus.value;
     state.filters.humanDecision = filterHumanDecision.value;
     state.filters.llmDecision = filterLLMDecision.value;
+    state.filters.inputMethod = filterInputMethod.value;
     state.filters.search = filterSearch.value.trim();
     state.limit = Number.parseInt(filterLimit.value, 10) || 25;
     state.offset = 0;
@@ -381,9 +387,10 @@ resetFiltersBtn.addEventListener('click', () => {
     filterStatus.value = '';
     filterHumanDecision.value = '';
     filterLLMDecision.value = '';
+    filterInputMethod.value = '';
     filterSearch.value = '';
     filterLimit.value = '25';
-    state.filters = { status: '', humanDecision: '', llmDecision: '', search: '' };
+    state.filters = { status: '', humanDecision: '', llmDecision: '', inputMethod: '', search: '' };
     state.limit = 25;
     state.offset = 0;
     fetchJobs();
