@@ -5,6 +5,8 @@ from requests.auth import HTTPBasicAuth
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 import urllib3
+from typing import List, Tuple
+from utils.internal_vlm import internal_vlm_client
 
 # SSL 경고 비활성화 (자체 서명 인증서 사용 시)
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -18,6 +20,81 @@ CONFLUENCE_API_TOKEN = os.getenv("CONFLUENCE_API_TOKEN", "")
 def get_auth():
     """Confluence 인증 정보 반환"""
     return HTTPBasicAuth(CONFLUENCE_USERNAME, CONFLUENCE_API_TOKEN)
+
+def get_page_images(page_id: str, html_content: str) -> List[bytes]:
+    """페이지에서 이미지 추출"""
+    images = []
+
+    if not internal_vlm_client.is_enabled():
+        return images
+
+    try:
+        soup = BeautifulSoup(html_content, 'html.parser')
+
+        # 이미지 태그 찾기 (Confluence는 ac:image와 img 태그 사용)
+        img_tags = soup.find_all(['img', 'ac:image'])
+
+        for img in img_tags:
+            # 이미지 URL 추출
+            image_url = None
+
+            # <img src="..."> 형태
+            if img.name == 'img' and img.get('src'):
+                image_url = img.get('src')
+
+            # <ac:image><ri:attachment ri:filename="..."/></ac:image> 형태
+            elif img.name == 'ac:image':
+                attachment = img.find('ri:attachment')
+                if attachment and attachment.get('ri:filename'):
+                    filename = attachment.get('ri:filename')
+                    # Confluence attachment URL 구성
+                    image_url = f"{CONFLUENCE_BASE_URL}/rest/api/content/{page_id}/child/attachment"
+                    # 실제 첨부 파일 다운로드 URL 가져오기
+                    image_url = get_attachment_download_url(page_id, filename)
+
+            if image_url:
+                # 상대 URL을 절대 URL로 변환
+                if image_url.startswith('/'):
+                    image_url = f"{CONFLUENCE_BASE_URL}{image_url}"
+
+                # 이미지 다운로드
+                try:
+                    img_response = requests.get(image_url, auth=get_auth(), timeout=30, verify=False)
+                    img_response.raise_for_status()
+                    images.append(img_response.content)
+                except Exception as img_err:
+                    print(f"이미지 다운로드 실패 ({image_url}): {str(img_err)}")
+                    continue
+
+    except Exception as e:
+        print(f"이미지 추출 중 오류: {str(e)}")
+
+    return images
+
+
+def get_attachment_download_url(page_id: str, filename: str) -> str:
+    """Confluence 첨부파일 다운로드 URL 가져오기"""
+    try:
+        url = f"{CONFLUENCE_BASE_URL}/rest/api/content/{page_id}/child/attachment"
+        params = {"filename": filename}
+
+        response = requests.get(url, params=params, auth=get_auth(), timeout=30, verify=False)
+        response.raise_for_status()
+
+        data = response.json()
+        results = data.get("results", [])
+
+        if results:
+            # 첨부파일의 다운로드 링크 추출
+            download_link = results[0].get("_links", {}).get("download")
+            if download_link:
+                return f"{CONFLUENCE_BASE_URL}{download_link}"
+
+        return ""
+    except Exception as e:
+        print(f"첨부파일 URL 가져오기 실패: {str(e)}")
+        return ""
+
 
 def get_page_content(page_id: str) -> dict:
     """특정 페이지의 내용 가져오기"""
@@ -37,11 +114,15 @@ def get_page_content(page_id: str) -> dict:
         soup = BeautifulSoup(html_content, 'html.parser')
         text_content = soup.get_text(separator='\n', strip=True)
 
+        # 이미지 추출
+        images = get_page_images(page_id, html_content)
+
         return {
             "id": data.get("id"),
             "title": data.get("title"),
             "content": text_content,
             "html": html_content,
+            "images": images,
             "version": data.get("version", {}).get("number"),
             "space": data.get("space", {}).get("key"),
         }

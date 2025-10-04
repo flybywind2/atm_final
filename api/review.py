@@ -10,7 +10,8 @@ import os
 
 # utils 모듈 import를 위한 경로 추가
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from utils.file_parser import extract_text_from_file
+from utils.file_parser import extract_text_from_file, extract_text_and_images_from_file
+from utils.internal_vlm import internal_vlm_client
 
 router = APIRouter(prefix="/api/v1/review", tags=["review"])
 
@@ -59,12 +60,81 @@ async def submit_proposal(
     제안서 제출 - 파일 업로드 또는 텍스트 직접 입력
     """
     proposal_content = ""
+    image_descriptions = []
 
     if file:
         # 파일 업로드 방식
         contents = await file.read()
-        # 파일 파서를 사용하여 텍스트 추출
-        proposal_content = extract_text_from_file(contents, file.filename)
+        filename_lower = file.filename.lower()
+
+        # 이미지 파일 확장자 체크
+        image_extensions = ('.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.tiff', '.svg')
+        is_image_file = filename_lower.endswith(image_extensions)
+
+        # 이미지 파일인 경우 직접 VLM 처리
+        if is_image_file and internal_vlm_client.is_enabled():
+            print(f"[VLM] Direct image file upload detected: {file.filename}")
+            try:
+                # Base64 인코딩
+                image_base64 = internal_vlm_client.encode_image_to_base64(contents)
+
+                # VLM으로 이미지 분석
+                description = internal_vlm_client.analyze_image(
+                    image_base64,
+                    prompt="이 이미지는 제안서 관련 이미지입니다. 이미지에서 보이는 내용을 상세하게 설명하고, 제안서 검토에 도움이 될 만한 정보를 추출해주세요.",
+                    max_tokens=1500
+                )
+
+                proposal_content = f"업로드된 이미지: {file.filename}\n\n"
+                proposal_content += "="*80 + "\n"
+                proposal_content += "이미지 분석 결과\n"
+                proposal_content += "="*80 + "\n"
+                proposal_content += description
+
+                print(f"[VLM] Image analyzed successfully")
+            except Exception as img_err:
+                print(f"[VLM] Error analyzing image: {str(img_err)}")
+                proposal_content = f"[이미지 분석 실패: {str(img_err)}]"
+
+        # VLM이 활성화되어 있고 문서 파일인 경우 이미지도 추출하여 분석
+        elif internal_vlm_client.is_enabled():
+            text_content, images = extract_text_and_images_from_file(contents, file.filename)
+            proposal_content = text_content
+
+            # 추출된 이미지를 VLM으로 분석
+            if images:
+                print(f"[VLM] Found {len(images)} images in {file.filename}")
+                for idx, image_bytes in enumerate(images, 1):
+                    try:
+                        # Base64 인코딩
+                        image_base64 = internal_vlm_client.encode_image_to_base64(image_bytes)
+
+                        # VLM으로 이미지 분석
+                        description = internal_vlm_client.analyze_image(
+                            image_base64,
+                            prompt=f"이 이미지는 제안서의 {idx}번째 이미지입니다. 이미지에서 보이는 내용을 상세하게 설명하고, 제안서 검토에 도움이 될 만한 정보를 추출해주세요.",
+                            max_tokens=1000
+                        )
+                        image_descriptions.append(f"[이미지 {idx}]\n{description}")
+                        print(f"[VLM] Image {idx} analyzed successfully")
+                    except Exception as img_err:
+                        print(f"[VLM] Error analyzing image {idx}: {str(img_err)}")
+                        continue
+
+                # 이미지 설명을 제안서 내용에 추가
+                if image_descriptions:
+                    proposal_content += "\n\n" + "="*80 + "\n"
+                    proposal_content += "이미지 분석 결과\n"
+                    proposal_content += "="*80 + "\n"
+                    proposal_content += "\n\n".join(image_descriptions)
+        else:
+            # VLM 비활성화 시 또는 이미지 파일이지만 VLM 비활성화
+            if is_image_file:
+                proposal_content = f"[이미지 파일 업로드됨: {file.filename}]\n\n이미지 분석을 위해 VLM을 활성화해주세요."
+            else:
+                # 일반 문서 파일의 텍스트만 추출
+                proposal_content = extract_text_from_file(contents, file.filename)
+
     elif text:
         # 텍스트 직접 입력 방식
         proposal_content = text

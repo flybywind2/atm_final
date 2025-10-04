@@ -4,8 +4,13 @@ from fastapi.responses import JSONResponse
 import asyncio
 import json
 import os
+import sys
 from typing import Callable, Dict
 from fastapi import WebSocket
+
+# utils 모듈 import를 위한 경로 추가
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from utils.internal_vlm import internal_vlm_client
 
 router = APIRouter(prefix="/api/v1/confluence", tags=["confluence"])
 
@@ -170,6 +175,36 @@ async def submit_confluence_for_review(
         for idx, page in enumerate(pages):
             raw_title = page.get('title') or ''
             page_content = f"{'='*80}\n페이지: {raw_title}\nID: {page.get('id')}\n{'='*80}\n{page.get('content')}"
+
+            # VLM이 활성화되어 있고 이미지가 있으면 분석하여 추가
+            images = page.get('images', [])
+            if internal_vlm_client.is_enabled() and images:
+                print(f"[VLM] Found {len(images)} images in Confluence page {page.get('id')}")
+                image_descriptions = []
+                for img_idx, image_bytes in enumerate(images, 1):
+                    try:
+                        # Base64 인코딩
+                        image_base64 = internal_vlm_client.encode_image_to_base64(image_bytes)
+
+                        # VLM으로 이미지 분석
+                        description = internal_vlm_client.analyze_image(
+                            image_base64,
+                            prompt=f"이 이미지는 Confluence 페이지의 {img_idx}번째 이미지입니다. 이미지에서 보이는 내용을 상세하게 설명하고, 제안서 검토에 도움이 될 만한 정보를 추출해주세요.",
+                            max_tokens=1000
+                        )
+                        image_descriptions.append(f"[이미지 {img_idx}]\n{description}")
+                        print(f"[VLM] Image {img_idx} analyzed successfully")
+                    except Exception as img_err:
+                        print(f"[VLM] Error analyzing image {img_idx}: {str(img_err)}")
+                        continue
+
+                # 이미지 설명을 페이지 내용에 추가
+                if image_descriptions:
+                    page_content += "\n\n" + "="*80 + "\n"
+                    page_content += "이미지 분석 결과\n"
+                    page_content += "="*80 + "\n"
+                    page_content += "\n\n".join(image_descriptions)
+
             job_title = raw_title.strip() or await _generate_job_title_func(page_content, fallback=f"Confluence 페이지 {idx+1}")
 
             # Confluence 페이지 URL 생성
